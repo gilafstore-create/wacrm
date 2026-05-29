@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: wacrm
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        fromDatabase:
+          name: wacrm
+          property: NEXT_PUBLIC_SUPABASE_URL
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        fromDatabase:
+          name: wacrm
+          property: NEXT_PUBLIC_SUPABASE_ANON_KEY
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        fromDatabase:
+          name: wacrm
+          property: SUPABASE_SERVICE_ROLE_KEY
+      - key: ENCRYPTION_KEY
+        fromDatabase:
+          name: wacrm
+          property: ENCRYPTION_KEY
+      - key: META_APP_SECRET
+        fromDatabase:
+          name: wacrm
+          property: META_APP_SECRET
+      - key: NEXT_PUBLIC_SITE_URL
+        fromDatabase:
+          name: wacrm
+          property: NEXT_PUBLIC_SITE_URL
