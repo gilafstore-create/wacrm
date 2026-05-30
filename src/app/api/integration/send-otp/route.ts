@@ -1,115 +1,97 @@
-import { NextResponse } from 'next/server'
+/**
+ * POST /api/integration/send-otp
+ * Sends WhatsApp OTP — rate limited, user-scoped, logged
+ */
+import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { sendTemplateMessage } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils'
+import {
+  validateApiKey, applyRateLimit, logSecurityEvent, getClientIP,
+} from '@/lib/integration/middleware'
 
-/**
- * POST /api/integration/send-otp
- * Sends an OTP via WhatsApp template message.
- * Called by GilafStore's CRM engine.
- */
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  const ip = getClientIP(request)
   try {
-    const apiKey = request.headers.get('X-GilafStore-Key')
-    if (!apiKey) {
-      return NextResponse.json({ error: 'Missing API key' }, { status: 401 })
+    const apiKey = request.headers.get('X-GilafStore-Key') ?? ''
+    if (!apiKey) return NextResponse.json({ error: 'Missing API key' }, { status: 401 })
+
+    // Rate limit — OTP is strict: 10/min per key, 20/min per IP
+    const limited = await applyRateLimit(request, apiKey, 'send-otp')
+    if (limited) {
+      await logSecurityEvent('rate_limit_exceeded', 'medium', {
+        ip, apiKeyPrefix: apiKey.substring(0, 8), route: 'send-otp',
+      })
+      return limited
+    }
+
+    const { record: keyRecord, error: keyError } = await validateApiKey(apiKey)
+    if (keyError || !keyRecord) {
+      return NextResponse.json({ error: keyError ?? 'Invalid key' }, { status: 401 })
+    }
+
+    const body = await request.json()
+    const { phone, otp, template_name, variables } = body
+
+    if (!phone || !otp) {
+      return NextResponse.json({ error: 'Missing phone or otp' }, { status: 400 })
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const admin: any = supabaseAdmin()
+    const ownerUserId = keyRecord.user_id
 
-    // ISSUE-002 + ISSUE-003: read user_id from integration key (migration 015)
-    const { data: keyRecord } = await admin
-      .from('integration_keys')
-      .select('id, user_id')
-      .eq('api_key', apiKey)
-      .eq('is_active', true)
-      .maybeSingle()
-
-    if (!keyRecord) {
-      return NextResponse.json({ error: 'Invalid API key' }, { status: 403 })
-    }
-
-    const ownerUserId = keyRecord.user_id  // ISSUE-002
-
-    const body = await request.json()
-    const { phone, otp, expiry_minutes, template } = body
-
-    if (!phone || !otp) {
-      return NextResponse.json(
-        { error: 'phone and otp are required' },
-        { status: 400 }
-      )
-    }
-
-    // Get WhatsApp config scoped to this CRM owner (ISSUE-002)
-    const { data: config } = await admin
+    // Get WhatsApp config
+    const { data: waConfig } = await admin
       .from('whatsapp_config')
-      .select('*')
-      .eq('user_id', ownerUserId)  // ISSUE-002: was .limit(1).single() (unscoped)
+      .select('access_token, phone_number_id')
+      .eq('user_id', ownerUserId)
       .maybeSingle()
 
-    if (!config) {
-      return NextResponse.json(
-        { error: 'WhatsApp not configured in CRM' },
-        { status: 503 }
-      )
+    if (!waConfig) {
+      return NextResponse.json({ error: 'WhatsApp not configured' }, { status: 503 })
     }
 
-    const accessToken = decrypt(config.access_token)
+    const accessToken = decrypt(waConfig.access_token)
     const sanitizedPhone = sanitizePhoneForMeta(phone)
 
-    // Send OTP template message
-    const templateName = template || 'otp_verification'
-    const params = [otp, String(expiry_minutes || 5)]
+    // Send via Meta API
+    const metaResult = await sendTemplateMessage({
+      accessToken,
+      phoneNumberId: waConfig.phone_number_id,
+      to: sanitizedPhone,
+      templateName: template_name ?? 'otp_verification',
+      language: 'en',
+      params: [String(otp)], // body variable {{1}}
+    })
 
-    try {
-      const result = await sendTemplateMessage({
-        phoneNumberId: config.phone_number_id,
-        accessToken,
-        to: sanitizedPhone,
-        templateName,
-        params,
-      })
+    const messageId = metaResult?.messageId ?? null
+    const status = messageId ? 'sent' : 'failed'
 
-      return NextResponse.json({
-        success: true,
-        message_id: result.messageId,
-      })
-    } catch (sendError) {
-      const message = sendError instanceof Error ? sendError.message : 'Unknown error'
-      console.error('[integration/send-otp] WhatsApp send failed:', message)
+    // Log
+    void admin.from('integration_message_logs').insert({
+      user_id: ownerUserId,
+      phone: sanitizedPhone,
+      template_name: template_name ?? 'otp_verification',
+      variables: variables ?? { otp },
+      message_id: messageId,
+      status,
+      source: 'gilafstore_otp',
+    })
 
-      // Fallback: try sending as plain text if template fails
-      try {
-        const { sendTextMessage } = await import('@/lib/whatsapp/meta-api')
-        const textResult = await sendTextMessage({
-          phoneNumberId: config.phone_number_id,
-          accessToken,
-          to: sanitizedPhone,
-          text: `Your Gilaf Store verification code is: ${otp}\n\nValid for ${expiry_minutes || 5} minutes. Do not share this code with anyone.`,
-        })
-
-        return NextResponse.json({
-          success: true,
-          message_id: textResult.messageId,
-          fallback: true,
-        })
-      } catch (fallbackError) {
-        const fbMsg = fallbackError instanceof Error ? fallbackError.message : 'Unknown error'
-        console.error('[integration/send-otp] Fallback text send failed:', fbMsg)
-        return NextResponse.json(
-          { success: false, error: `WhatsApp send failed: ${message}` },
-          { status: 502 }
-        )
-      }
+    if (!messageId) {
+      return NextResponse.json({ success: false, error: 'WhatsApp delivery failed' }, { status: 502 })
     }
-  } catch (error) {
-    console.error('[integration/send-otp] Error:', error)
-    return NextResponse.json(
-      { success: false, error: 'Internal server error' },
-      { status: 500 }
-    )
+
+    return NextResponse.json({
+      success: true,
+      message_id: messageId,
+      phone: sanitizedPhone,
+    })
+
+  } catch (err) {
+    console.error('[integration/send-otp]', err)
+    return NextResponse.json({ success: false, error: 'Internal error' }, { status: 500 })
   }
 }

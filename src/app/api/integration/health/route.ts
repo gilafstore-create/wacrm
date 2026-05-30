@@ -1,91 +1,94 @@
-import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-
-// Lazy service-role client — untyped because integration_keys isn't in generated DB types
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _adminClient: any = null
-function supabaseAdmin() {
-  if (!_adminClient) {
-    _adminClient = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    )
-  }
-  return _adminClient
-}
-
 /**
  * GET /api/integration/health
+ * POST /api/integration/health  (authenticated)
  *
- * Public health-check endpoint used by GilafStore's "Test Connection" button.
- * Returns HTTP 200 with a JSON body so PHP's simpleHealthCheck() succeeds.
- *
- * Also accepts POST (for authenticated health checks from apiRequest()).
+ * Public: basic health check
+ * Authenticated (API key): full diagnostic status
  */
+import { NextRequest, NextResponse } from 'next/server'
+import { validateApiKey, applyRateLimit, supabaseAdmin, getClientIP } from '@/lib/integration/middleware'
+
 export async function GET() {
-  return buildHealthResponse()
-}
-
-export async function POST(request: Request) {
-  // Authenticated health check — validates the API key if supplied,
-  // returns additional diagnostic fields.
-  const apiKey = request.headers.get('X-GilafStore-Key')
-
-  if (!apiKey) {
-    // No key → basic health only (same as GET)
-    return buildHealthResponse()
-  }
-
-  const admin = supabaseAdmin()
-  let dbStatus = 'unknown'
-  let apiKeyValid = false
-  let userId: string | null = null
-
-  try {
-    const { data: keyRecord, error: keyError } = await admin
-      .from('integration_keys')
-      .select('id, user_id, is_active')
-      .eq('api_key', apiKey)
-      .eq('is_active', true)
-      .maybeSingle()
-
-    dbStatus = keyError ? `error: ${keyError.message}` : 'connected'
-    apiKeyValid = !!keyRecord
-    userId = keyRecord?.user_id ?? null
-  } catch (err) {
-    dbStatus = err instanceof Error ? `exception: ${err.message}` : 'exception'
-  }
-
-  return NextResponse.json(
-    {
-      success: true,
-      service: 'WACRM',
-      status: 'healthy',
-      database: dbStatus,
-      api_key_valid: apiKeyValid,
-      user_id: userId,
-      render: !!process.env.RENDER,
-      timestamp: new Date().toISOString(),
-    },
-    { status: 200 },
-  )
-}
-
-function buildHealthResponse() {
   const supabaseConfigured =
     !!process.env.NEXT_PUBLIC_SUPABASE_URL &&
     !!process.env.SUPABASE_SERVICE_ROLE_KEY
 
-  return NextResponse.json(
-    {
-      success: true,
-      service: 'WACRM',
-      status: 'healthy',
-      version: process.env.npm_package_version ?? 'unknown',
-      database: supabaseConfigured ? 'configured' : 'not_configured',
-      render: !!process.env.RENDER,
-      timestamp: new Date().toISOString(),
-    },
-    { status: 200 },
-  )
+  return NextResponse.json({
+    success: true,
+    service: 'WACRM',
+    status: 'healthy',
+    version: process.env.npm_package_version ?? 'unknown',
+    database: supabaseConfigured ? 'configured' : 'not_configured',
+    render: !!process.env.RENDER,
+    timestamp: new Date().toISOString(),
+  }, { status: 200 })
+}
+
+export async function POST(request: NextRequest) {
+  const apiKey = request.headers.get('X-GilafStore-Key') ?? ''
+  const ip = getClientIP(request)
+
+  if (!apiKey) return GET()
+
+  // Rate limit
+  const limited = await applyRateLimit(request, apiKey, 'health')
+  if (limited) return limited
+
+  const { record, error } = await validateApiKey(apiKey)
+  if (error || !record) {
+    return NextResponse.json({ error: error ?? 'Invalid key' }, { status: 401 })
+  }
+
+  const admin = supabaseAdmin()
+  let dbStatus = 'unknown'
+  let waStatus = 'unknown'
+  let queuePending = 0
+
+  try {
+    // DB check
+    const { error: dbErr } = await admin.from('integration_keys').select('id').eq('id', record.id).maybeSingle()
+    dbStatus = dbErr ? `error: ${dbErr.message}` : 'connected'
+
+    // WA config check
+    const { data: waConfig } = await admin
+      .from('whatsapp_config')
+      .select('phone_number_id, is_active')
+      .eq('user_id', record.user_id)
+      .maybeSingle()
+    waStatus = waConfig?.is_active ? 'configured' : 'not_configured'
+
+    // Queue stats
+    const { count } = await admin
+      .from('integration_webhook_logs')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', record.user_id)
+      .eq('status', 'received')
+    queuePending = count ?? 0
+
+  } catch (err) {
+    dbStatus = `exception: ${err instanceof Error ? err.message : 'unknown'}`
+  }
+
+  // Log heartbeat
+  void admin.from('heartbeat_logs').insert({
+    user_id: record.user_id,
+    status: 'ok',
+    latency_ms: 0,
+    render_online: true,
+    db_online: dbStatus === 'connected',
+    wa_online: waStatus === 'configured',
+  })
+
+  return NextResponse.json({
+    success: true,
+    service: 'WACRM',
+    status: 'healthy',
+    database: dbStatus,
+    whatsapp: waStatus,
+    api_key_valid: true,
+    user_id: record.user_id,
+    queue_pending: queuePending,
+    render: !!process.env.RENDER,
+    timestamp: new Date().toISOString(),
+  }, { status: 200 })
 }
