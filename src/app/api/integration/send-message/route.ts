@@ -1,153 +1,90 @@
-import { NextResponse } from 'next/server'
+/**
+ * POST /api/integration/send-message
+ * Sends a WhatsApp message (template or text) — rate limited, user-scoped
+ */
+import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { sendTemplateMessage, sendTextMessage } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils'
+import { validateApiKey, applyRateLimit, getClientIP } from '@/lib/integration/middleware'
 
-/**
- * POST /api/integration/send-message
- * Sends a WhatsApp message (template or text) to a phone number.
- * Used by GilafStore for order notifications, cart recovery, etc.
- */
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  const ip = getClientIP(request)
   try {
-    const apiKey = request.headers.get('X-GilafStore-Key')
-    if (!apiKey) {
-      return NextResponse.json({ error: 'Missing API key' }, { status: 401 })
+    const apiKey = request.headers.get('X-GilafStore-Key') ?? ''
+    if (!apiKey) return NextResponse.json({ error: 'Missing API key' }, { status: 401 })
+
+    const limited = await applyRateLimit(request, apiKey, 'send-message')
+    if (limited) return limited
+
+    const { record: keyRecord, error: keyError } = await validateApiKey(apiKey)
+    if (keyError || !keyRecord) {
+      return NextResponse.json({ error: keyError ?? 'Invalid key' }, { status: 401 })
     }
+
+    const body = await request.json()
+    const { phone, message, template_name, template_language, variables, type = 'text' } = body
+
+    if (!phone) return NextResponse.json({ error: 'Missing phone' }, { status: 400 })
+    if (!message && !template_name) return NextResponse.json({ error: 'Missing message or template_name' }, { status: 400 })
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const admin: any = supabaseAdmin()
+    const ownerUserId = keyRecord.user_id
 
-    // ISSUE-002 + ISSUE-003: read user_id from integration key (migration 015)
-    const { data: keyRecord } = await admin
-      .from('integration_keys')
-      .select('id, user_id')
-      .eq('api_key', apiKey)
-      .eq('is_active', true)
-      .maybeSingle()
-
-    if (!keyRecord) {
-      return NextResponse.json({ error: 'Invalid API key' }, { status: 403 })
-    }
-
-    const ownerUserId = keyRecord.user_id  // ISSUE-002
-
-    const body = await request.json()
-    const { phone, template_name, template_lang, variables, channel, text } = body
-
-    if (!phone) {
-      return NextResponse.json({ error: 'phone is required' }, { status: 400 })
-    }
-
-    // Get WhatsApp config scoped to this CRM owner (ISSUE-002)
-    const { data: config } = await admin
+    const { data: waConfig } = await admin
       .from('whatsapp_config')
-      .select('*')
-      .eq('user_id', ownerUserId)  // ISSUE-002: was .limit(1).single() (unscoped)
+      .select('access_token, phone_number_id')
+      .eq('user_id', ownerUserId)
       .maybeSingle()
 
-    if (!config) {
-      return NextResponse.json(
-        { error: 'WhatsApp not configured in CRM' },
-        { status: 503 }
-      )
-    }
+    if (!waConfig) return NextResponse.json({ error: 'WhatsApp not configured' }, { status: 503 })
 
-    const accessToken = decrypt(config.access_token)
+    const accessToken = decrypt(waConfig.access_token)
     const sanitizedPhone = sanitizePhoneForMeta(phone)
 
-    let messageId = ''
-
+    let metaResult: any
     if (template_name) {
-      // Build template params from variables
-      const params = variables
-        ? Object.values(variables).map(String)
-        : []
-
-      try {
-        const result = await sendTemplateMessage({
-          phoneNumberId: config.phone_number_id,
-          accessToken,
-          to: sanitizedPhone,
-          templateName: template_name,
-          params,
-        })
-        messageId = result.messageId
-      } catch (templateError) {
-        // If template fails, try text fallback with resolved template
-        const resolvedText = resolveTemplate(text || template_name, variables || {})
-        try {
-          const result = await sendTextMessage({
-            phoneNumberId: config.phone_number_id,
-            accessToken,
-            to: sanitizedPhone,
-            text: resolvedText,
-          })
-          messageId = result.messageId
-        } catch (textError) {
-          const msg = textError instanceof Error ? textError.message : 'Unknown error'
-          return NextResponse.json(
-            { success: false, error: `Send failed: ${msg}` },
-            { status: 502 }
-          )
-        }
-      }
-    } else if (text) {
-      // Plain text message
-      const resolvedText = resolveTemplate(text, variables || {})
-      try {
-        const result = await sendTextMessage({
-          phoneNumberId: config.phone_number_id,
-          accessToken,
-          to: sanitizedPhone,
-          text: resolvedText,
-        })
-        messageId = result.messageId
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : 'Unknown error'
-        return NextResponse.json(
-          { success: false, error: `Send failed: ${msg}` },
-          { status: 502 }
-        )
-      }
+      metaResult = await sendTemplateMessage({
+        accessToken,
+        phoneNumberId: waConfig.phone_number_id,
+        to: sanitizedPhone,
+        templateName: template_name,
+        language: template_language ?? 'en',
+        params: Array.isArray(variables) ? variables.map(String) : [],
+      })
     } else {
-      return NextResponse.json(
-        { error: 'Either template_name or text is required' },
-        { status: 400 }
-      )
+      metaResult = await sendTextMessage({
+        accessToken,
+        phoneNumberId: waConfig.phone_number_id,
+        to: sanitizedPhone,
+        text: message,
+      })
     }
 
-    // Log the sent message scoped to key owner (fire-and-forget)
+    const messageId = metaResult?.messageId ?? null
+    const status = messageId ? 'sent' : 'failed'
+
     void admin.from('integration_message_logs').insert({
-      user_id: ownerUserId,    // ISSUE-002: scope log to CRM owner
+      user_id: ownerUserId,
       phone: sanitizedPhone,
-      template_name: template_name || null,
-      message_text: text || null,
-      variables: variables || null,
+      template_name: template_name ?? null,
+      message_text: message ?? null,
+      variables: variables ?? null,
       message_id: messageId,
-      status: 'sent',
+      status,
       source: 'gilafstore',
     })
 
-    return NextResponse.json({
-      success: true,
-      message_id: messageId,
-    })
-  } catch (error) {
-    console.error('[integration/send-message] Error:', error)
-    return NextResponse.json(
-      { success: false, error: 'Internal server error' },
-      { status: 500 }
-    )
-  }
-}
+    if (!messageId) {
+      return NextResponse.json({ success: false, error: 'WhatsApp delivery failed' }, { status: 502 })
+    }
 
-/**
- * Resolves {{variable}} placeholders in a template string.
- */
-function resolveTemplate(template: string, variables: Record<string, any>): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
-    return variables[key] !== undefined ? String(variables[key]) : match
-  })
+    return NextResponse.json({ success: true, message_id: messageId, phone: sanitizedPhone })
+
+  } catch (err) {
+    console.error('[integration/send-message]', err)
+    return NextResponse.json({ success: false, error: 'Internal error' }, { status: 500 })
+  }
 }
