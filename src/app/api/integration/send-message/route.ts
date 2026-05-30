@@ -18,9 +18,10 @@ export async function POST(request: Request) {
 
     const admin = supabaseAdmin()
 
+    // ISSUE-002 + ISSUE-003: read user_id from integration key (migration 015)
     const { data: keyRecord } = await admin
       .from('integration_keys')
-      .select('id')
+      .select('id, user_id')
       .eq('api_key', apiKey)
       .eq('is_active', true)
       .maybeSingle()
@@ -29,6 +30,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid API key' }, { status: 403 })
     }
 
+    const ownerUserId = keyRecord.user_id  // ISSUE-002
+
     const body = await request.json()
     const { phone, template_name, template_lang, variables, channel, text } = body
 
@@ -36,12 +39,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'phone is required' }, { status: 400 })
     }
 
-    // Get WhatsApp config
+    // Get WhatsApp config scoped to this CRM owner (ISSUE-002)
     const { data: config } = await admin
       .from('whatsapp_config')
       .select('*')
-      .limit(1)
-      .single()
+      .eq('user_id', ownerUserId)  // ISSUE-002: was .limit(1).single() (unscoped)
+      .maybeSingle()
 
     if (!config) {
       return NextResponse.json(
@@ -114,8 +117,9 @@ export async function POST(request: Request) {
       )
     }
 
-    // Log the sent message (fire-and-forget)
+    // Log the sent message scoped to key owner (fire-and-forget)
     void admin.from('integration_message_logs').insert({
+      user_id: ownerUserId,    // ISSUE-002: scope log to CRM owner
       phone: sanitizedPhone,
       template_name: template_name || null,
       message_text: text || null,

@@ -14,9 +14,10 @@ export async function POST(request: Request) {
 
     const admin = supabaseAdmin()
 
+    // ISSUE-002 + ISSUE-003: Fetch user_id from the key itself — no profiles query needed
     const { data: keyRecord } = await admin
       .from('integration_keys')
-      .select('id')
+      .select('id, user_id')
       .eq('api_key', apiKey)
       .eq('is_active', true)
       .maybeSingle()
@@ -24,6 +25,9 @@ export async function POST(request: Request) {
     if (!keyRecord) {
       return NextResponse.json({ error: 'Invalid API key' }, { status: 403 })
     }
+
+    // Owner is now derived from the integration key (set by migration 015)
+    const ownerUserId = keyRecord.user_id
 
     const body = await request.json()
     const {
@@ -44,19 +48,7 @@ export async function POST(request: Request) {
       )
     }
 
-    // Get the CRM owner (first profile)
-    const { data: owner } = await admin
-      .from('profiles')
-      .select('user_id')
-      .limit(1)
-      .single()
-
-    if (!owner) {
-      return NextResponse.json(
-        { error: 'No CRM owner found' },
-        { status: 500 }
-      )
-    }
+    // Owner resolved from integration key (ISSUE-002 — profiles.limit(1) removed)
 
     // Find existing contact by phone or email
     let existingContact = null
@@ -65,7 +57,7 @@ export async function POST(request: Request) {
       const { data } = await admin
         .from('contacts')
         .select('*')
-        .eq('user_id', owner.user_id)
+        .eq('user_id', ownerUserId)  // ISSUE-002
         .or(`phone.eq.${cleaned},phone.like.%${cleaned.slice(-10)}`)
         .limit(1)
         .maybeSingle()
@@ -76,7 +68,7 @@ export async function POST(request: Request) {
       const { data } = await admin
         .from('contacts')
         .select('*')
-        .eq('user_id', owner.user_id)
+        .eq('user_id', ownerUserId)  // ISSUE-002
         .eq('email', email)
         .limit(1)
         .maybeSingle()
@@ -113,11 +105,11 @@ export async function POST(request: Request) {
         action: 'updated',
       })
     } else {
-      // Create new contact
+      // Create new contact — user_id from integration key (ISSUE-002)
       const { data: newContact, error } = await admin
         .from('contacts')
         .insert({
-          user_id: owner.user_id,
+          user_id: ownerUserId,  // ISSUE-002: was owner.user_id from profiles.limit(1)
           name: name || 'Unknown',
           phone: phone || '',
           email: email || null,

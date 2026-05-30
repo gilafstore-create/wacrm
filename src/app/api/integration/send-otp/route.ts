@@ -18,10 +18,10 @@ export async function POST(request: Request) {
 
     const admin = supabaseAdmin()
 
-    // Validate API key
+    // ISSUE-002 + ISSUE-003: read user_id from integration key (migration 015)
     const { data: keyRecord } = await admin
       .from('integration_keys')
-      .select('id')
+      .select('id, user_id')
       .eq('api_key', apiKey)
       .eq('is_active', true)
       .maybeSingle()
@@ -29,6 +29,8 @@ export async function POST(request: Request) {
     if (!keyRecord) {
       return NextResponse.json({ error: 'Invalid API key' }, { status: 403 })
     }
+
+    const ownerUserId = keyRecord.user_id  // ISSUE-002
 
     const body = await request.json()
     const { phone, otp, expiry_minutes, template } = body
@@ -40,12 +42,12 @@ export async function POST(request: Request) {
       )
     }
 
-    // Get WhatsApp config (first active config - admin/owner)
+    // Get WhatsApp config scoped to this CRM owner (ISSUE-002)
     const { data: config } = await admin
       .from('whatsapp_config')
       .select('*')
-      .limit(1)
-      .single()
+      .eq('user_id', ownerUserId)  // ISSUE-002: was .limit(1).single() (unscoped)
+      .maybeSingle()
 
     if (!config) {
       return NextResponse.json(
