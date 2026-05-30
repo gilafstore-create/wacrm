@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
-// Lazy service-role client — mirrors the pattern in src/lib/flows/admin-client.ts
-let _adminClient: ReturnType<typeof createClient> | null = null
+// Lazy service-role client — untyped because integration_keys isn't in generated DB types
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _adminClient: any = null
 function supabaseAdmin() {
   if (!_adminClient) {
     _adminClient = createClient(

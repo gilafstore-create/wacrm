@@ -1,4 +1,4 @@
-﻿import { NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import crypto from 'crypto'
 
@@ -17,7 +17,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing API key' }, { status: 401 })
     }
 
-    const admin = supabaseAdmin()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const admin: any = supabaseAdmin()
 
     // Validate API key ΓÇö also fetch user_id to scope all DB queries to the correct owner
     const { data: keyRecord } = await admin
@@ -113,7 +114,7 @@ export async function POST(request: Request) {
 }
 
 async function handleEvent(
-  admin: ReturnType<typeof supabaseAdmin>,
+  admin: any,
   event: string,
   data: any,
   ownerUserId: string  // ISSUE-002: CRM account owner derived from integration key
@@ -147,7 +148,7 @@ async function handleEvent(
   }
 }
 
-async function handleOrderPlaced(admin: ReturnType<typeof supabaseAdmin>, data: any, ownerUserId: string) {
+async function handleOrderPlaced(admin: any, data: any, ownerUserId: string) {
   const { order_id, customer_name, phone, email, total, items, payment_method } = data
 
   // Find or create CRM contact ΓÇö scoped to ownerUserId (ISSUE-002)
@@ -170,7 +171,7 @@ async function handleOrderPlaced(admin: ReturnType<typeof supabaseAdmin>, data: 
   return { success: true, contact_id: contact.id, message: 'Order event processed' }
 }
 
-async function handleOrderStatusChange(admin: ReturnType<typeof supabaseAdmin>, data: any, status: string, ownerUserId: string) {
+async function handleOrderStatusChange(admin: any, data: any, status: string, ownerUserId: string) {
   const { order_id, phone, tracking_number, tracking_url } = data
   const contact = await findContactByPhone(admin, phone, ownerUserId)  // ISSUE-002
   if (!contact) return { success: true, message: 'Contact not found, skipping' }
@@ -185,7 +186,7 @@ async function handleOrderStatusChange(admin: ReturnType<typeof supabaseAdmin>, 
   return { success: true, contact_id: contact.id }
 }
 
-async function handlePaymentSuccess(admin: ReturnType<typeof supabaseAdmin>, data: any, ownerUserId: string) {
+async function handlePaymentSuccess(admin: any, data: any, ownerUserId: string) {
   const { order_id, phone, amount } = data
   const contact = await findContactByPhone(admin, phone, ownerUserId)  // ISSUE-002
   if (!contact) return { success: true, message: 'Contact not found' }
@@ -199,7 +200,7 @@ async function handlePaymentSuccess(admin: ReturnType<typeof supabaseAdmin>, dat
   return { success: true, contact_id: contact.id }
 }
 
-async function handlePaymentFailed(admin: ReturnType<typeof supabaseAdmin>, data: any, ownerUserId: string) {
+async function handlePaymentFailed(admin: any, data: any, ownerUserId: string) {
   const { order_id, phone } = data
   const contact = await findContactByPhone(admin, phone, ownerUserId)  // ISSUE-002
   if (!contact) return { success: true, message: 'Contact not found' }
@@ -208,7 +209,7 @@ async function handlePaymentFailed(admin: ReturnType<typeof supabaseAdmin>, data
   return { success: true, contact_id: contact.id }
 }
 
-async function handleCartAbandoned(admin: ReturnType<typeof supabaseAdmin>, data: any, ownerUserId: string) {
+async function handleCartAbandoned(admin: any, data: any, ownerUserId: string) {
   const { phone, email, cart_total, items, checkout_url } = data
   const contact = await findContactByPhone(admin, phone, ownerUserId)  // ISSUE-002
   if (!contact) return { success: true, message: 'Contact not found' }
@@ -219,7 +220,7 @@ async function handleCartAbandoned(admin: ReturnType<typeof supabaseAdmin>, data
   return { success: true, contact_id: contact.id, message: 'Cart abandonment tracked' }
 }
 
-async function handleCartRecovered(admin: ReturnType<typeof supabaseAdmin>, data: any, ownerUserId: string) {
+async function handleCartRecovered(admin: any, data: any, ownerUserId: string) {
   const { phone, order_id } = data
   const contact = await findContactByPhone(admin, phone, ownerUserId)  // ISSUE-002
   if (!contact) return { success: true, message: 'Contact not found' }
@@ -228,7 +229,7 @@ async function handleCartRecovered(admin: ReturnType<typeof supabaseAdmin>, data
   return { success: true, contact_id: contact.id }
 }
 
-async function handleCustomerCreated(admin: ReturnType<typeof supabaseAdmin>, data: any, ownerUserId: string) {
+async function handleCustomerCreated(admin: any, data: any, ownerUserId: string) {
   const { name, phone, email, local_user_id } = data
   const contact = await findOrCreateContact(admin, { name, phone, email, local_user_id }, ownerUserId)  // ISSUE-002
   if (!contact) return { success: false, error: 'Failed to create contact' }
@@ -239,7 +240,7 @@ async function handleCustomerCreated(admin: ReturnType<typeof supabaseAdmin>, da
   return { success: true, contact_id: contact.id }
 }
 
-async function handleCustomerUpdated(admin: ReturnType<typeof supabaseAdmin>, data: any, ownerUserId: string) {
+async function handleCustomerUpdated(admin: any, data: any, ownerUserId: string) {
   const { phone, email, name, local_user_id } = data
   const contact = await findContactByPhone(admin, phone, ownerUserId)  // ISSUE-002
   if (!contact) return { success: true, message: 'Contact not found' }
@@ -256,7 +257,7 @@ async function handleCustomerUpdated(admin: ReturnType<typeof supabaseAdmin>, da
   return { success: true, contact_id: contact.id }
 }
 
-async function handleCustomerLogin(admin: ReturnType<typeof supabaseAdmin>, data: any, ownerUserId: string) {
+async function handleCustomerLogin(admin: any, data: any, ownerUserId: string) {
   const { phone } = data
   const contact = await findContactByPhone(admin, phone, ownerUserId)  // ISSUE-002
   if (!contact) return { success: true, message: 'Contact not found' }
@@ -275,7 +276,7 @@ async function handleCustomerLogin(admin: ReturnType<typeof supabaseAdmin>, data
 // ISSUE-002: ownerUserId parameter added ΓÇö every contacts query scoped to one CRM account.
 // This prevents cross-account contact leakage when multiple users share a WACRM instance.
 async function findContactByPhone(
-  admin: ReturnType<typeof supabaseAdmin>,
+  admin: any,
   phone: string,
   ownerUserId: string
 ) {
@@ -296,7 +297,7 @@ async function findContactByPhone(
 // ISSUE-002: ownerUserId parameter replaces the profiles.limit(1).single() call.
 // The owner is now read directly from the verified integration key (migration 015).
 async function findOrCreateContact(
-  admin: ReturnType<typeof supabaseAdmin>,
+  admin: any,
   info: { name?: string; phone?: string; email?: string; local_user_id?: number },
   ownerUserId: string  // ISSUE-002: passed from keyRecord.user_id ΓÇö no profiles query needed
 ) {
@@ -324,7 +325,7 @@ async function findOrCreateContact(
   return newContact
 }
 
-async function ensureTag(admin: ReturnType<typeof supabaseAdmin>, contact: any, tagName: string) {
+async function ensureTag(admin: any, contact: any, tagName: string) {
   // Find or create tag
   let { data: tag } = await admin
     .from('tags')
@@ -349,7 +350,7 @@ async function ensureTag(admin: ReturnType<typeof supabaseAdmin>, contact: any, 
   }
 }
 
-async function removeTag(admin: ReturnType<typeof supabaseAdmin>, contact: any, tagName: string) {
+async function removeTag(admin: any, contact: any, tagName: string) {
   const { data: tag } = await admin
     .from('tags')
     .select('id')
@@ -363,7 +364,7 @@ async function removeTag(admin: ReturnType<typeof supabaseAdmin>, contact: any, 
 }
 
 async function triggerAutomation(
-  admin: ReturnType<typeof supabaseAdmin>,
+  admin: any,
   contact: any,
   trigger: string,
   data: any

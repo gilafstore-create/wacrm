@@ -1,4 +1,4 @@
-﻿import { NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { sendTemplateMessage, sendTextMessage } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
@@ -16,7 +16,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing API key' }, { status: 401 })
     }
 
-    const admin = supabaseAdmin()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const admin: any = supabaseAdmin()
 
     // ISSUE-002 + ISSUE-003: read user_id from integration key (migration 015)
     const { data: keyRecord } = await admin

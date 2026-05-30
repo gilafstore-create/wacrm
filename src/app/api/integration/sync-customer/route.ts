@@ -1,4 +1,4 @@
-﻿import { NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 
 /**
@@ -12,7 +12,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing API key' }, { status: 401 })
     }
 
-    const admin = supabaseAdmin()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const admin: any = supabaseAdmin()
 
     // ISSUE-002 + ISSUE-003: Fetch user_id from the key itself ΓÇö no profiles query needed
     const { data: keyRecord } = await admin
