@@ -19,10 +19,10 @@ export async function POST(request: Request) {
 
     const admin = supabaseAdmin()
 
-    // Validate API key
+    // Validate API key — also fetch user_id to scope all DB queries to the correct owner
     const { data: keyRecord } = await admin
       .from('integration_keys')
-      .select('id, api_secret')
+      .select('id, api_secret, user_id')
       .eq('api_key', apiKey)
       .eq('is_active', true)
       .maybeSingle()
@@ -31,20 +31,45 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid API key' }, { status: 403 })
     }
 
-    const body = await request.json()
-    const { event, data } = body
+    // ── ISSUE-001 FIX: Enforce HMAC signature ────────────────────
+    // Read the raw body bytes FIRST — before any JSON.parse()
+    // This ensures the HMAC is computed on the exact bytes PHP sent,
+    // matching PHP's hash_hmac('sha256', json_encode($data), $secret).
+    // Using rawBody also safely handles Unicode characters in customer
+    // names (e.g. Hindi/Arabic), which JSON.parse→JSON.stringify would
+    // mangle by unescaping \u sequences that PHP kept escaped.
+    const rawBody = await request.text()
 
-    // Verify HMAC signature
-    if (signature && keyRecord.api_secret) {
-      const expectedSig = crypto
-        .createHmac('sha256', keyRecord.api_secret)
-        .update(JSON.stringify(body))
-        .digest('hex')
-      // Timing-safe comparison is not critical for webhooks but good practice
-      if (signature !== expectedSig) {
-        console.warn('[integration/webhook] Signature mismatch for event:', event)
-      }
+    // Signature is now REQUIRED — reject requests that omit the header entirely
+    if (!signature) {
+      console.warn('[integration/webhook] Rejected: missing X-GilafStore-Signature header')
+      return NextResponse.json({ error: 'Missing signature' }, { status: 401 })
     }
+
+    // Compute expected HMAC-SHA256 over the raw request body
+    const expectedSig = crypto
+      .createHmac('sha256', keyRecord.api_secret)
+      .update(rawBody)
+      .digest('hex')
+
+    // Timing-safe comparison — prevents timing-based side-channel attacks.
+    // Pad both buffers to equal length before comparing.
+    const sigA = Buffer.from(signature.padEnd(64, '\0'))
+    const sigB = Buffer.from(expectedSig.padEnd(64, '\0'))
+    if (sigA.length !== sigB.length || !crypto.timingSafeEqual(sigA, sigB)) {
+      console.warn('[integration/webhook] Rejected: HMAC signature mismatch')
+      return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
+    }
+    // ─────────────────────────────────────────────────────────────
+
+    // Parse JSON only AFTER signature is verified
+    let body: { event: string; data: unknown }
+    try {
+      body = JSON.parse(rawBody)
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+    }
+    const { event, data } = body
 
     // Replay protection: reject if timestamp is older than 5 minutes
     if (timestamp) {
