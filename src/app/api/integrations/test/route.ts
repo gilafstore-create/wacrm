@@ -26,7 +26,7 @@ async function getUser() {
   return user
 }
 
-// Probe a URL with a timeout
+// Probe a URL with a timeout — never throws
 async function probe(url: string, options: RequestInit = {}, timeoutMs = 8000) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -36,7 +36,7 @@ async function probe(url: string, options: RequestInit = {}, timeoutMs = 8000) {
     clearTimeout(timer)
     const latency = Date.now() - start
     let body: unknown = null
-    try { body = await res.json() } catch { /* non-JSON */ }
+    try { body = await res.json() } catch { /* non-JSON is fine */ }
     return { ok: res.ok, status: res.status, body, latency, error: null }
   } catch (err: unknown) {
     clearTimeout(timer)
@@ -61,56 +61,73 @@ export async function POST(request: NextRequest) {
   const base = rawUrl.replace(/\/$/, '')
   const checks: Record<string, unknown> = {}
   const endpoints: string[] = []
-  let healthOk = false
-  let overallStatus: 'active' | 'warning' | 'error' = 'error'
-  let healthScore = 0
+  let siteReachable  = false   // base URL responds at all
+  let healthEndpoint = false   // dedicated /health route found
+  let webhookFound   = false   // webhook endpoint found (any 2xx-4xx)
+  let healthScore    = 0
 
-  // ── Probe known endpoint patterns ────────────────────────────────────────────
-  const candidateHealthUrls = [
-    `${base}/api/integration/health`,  // GilafStore WACRM standard
+  // ── 1. Check base URL reachable ──────────────────────────────────────────────
+  const baseCheck = await probe(base, {}, 8000)
+  if (baseCheck.status > 0 || baseCheck.ok) {
+    siteReachable = true
+    healthScore += 20
+    checks.site = { reachable: true, status: baseCheck.status, latency_ms: baseCheck.latency }
+  } else {
+    checks.site = { reachable: false, error: baseCheck.error }
+  }
+
+  // ── 2. GilafStore-specific health endpoints ───────────────────────────────────
+  const gilafHealthCandidates = [
+    `${base}/admin/crm_heartbeat.php`,       // our new heartbeat cron endpoint
+    `${base}/api/integration/health`,        // GilafStore WACRM proxy route
     `${base}/api/health`,
-    `${base}/wp-json/wc/v3/system_status`, // WooCommerce
     `${base}/api/v1/status`,
+    `${base}/api/v1/health`,
+    `${base}/health`,
   ]
-
-  for (const url of candidateHealthUrls) {
+  for (const url of gilafHealthCandidates) {
     const headers: HeadersInit = { 'Accept': 'application/json' }
     if (website_api_key) headers['X-GilafStore-Key'] = website_api_key
-    const result = await probe(url, { headers })
-    if (result.ok) {
-      checks.health = { url, status: result.status, latency_ms: result.latency, body: result.body }
+    const r = await probe(url, { headers }, 6000)
+    // A 200 OR 401/403 means the endpoint EXISTS (401/403 = auth required = alive)
+    if (r.status >= 200 && r.status < 500) {
+      checks.health = { url, status: r.status, latency_ms: r.latency }
       endpoints.push(url)
-      healthOk = true
-      healthScore += 40
+      if (r.ok) {
+        healthEndpoint = true
+        healthScore += 30  // full health endpoint responding
+      } else {
+        healthScore += 15  // endpoint exists but requires auth — that's fine
+      }
       break
     }
   }
 
-  if (!healthOk) {
-    // At minimum check base URL is reachable
-    const baseCheck = await probe(base, {})
-    checks.reachable = { ok: baseCheck.ok, status: baseCheck.status, latency_ms: baseCheck.latency }
-    if (baseCheck.ok) healthScore += 10
-  }
-
-  // ── Probe webhook endpoint ────────────────────────────────────────────────────
+  // ── 3. Webhook endpoint probe ─────────────────────────────────────────────────
   const webhookCandidates = [
     `${base}/api/integration/webhook`,
-    `${base}/wc-api/wacrm_webhook`,
+    `${base}/api/wacrm-webhook`,
     `${base}/api/webhook`,
+    `${base}/wc-api/wacrm_webhook`,
+    `${base}/wp-json/wacrm/v1/webhook`,
   ]
   for (const url of webhookCandidates) {
-    const r = await probe(url, { method: 'POST', body: '{}', headers: { 'Content-Type': 'application/json' } }, 5000)
-    // 401/403/405 all mean the URL exists but rejected our unauthenticated probe
+    const r = await probe(url, {
+      method: 'POST',
+      body: '{"event":"test"}',
+      headers: { 'Content-Type': 'application/json' },
+    }, 5000)
+    // Any response 200-499 means the URL exists (even 401/405 = endpoint is live)
     if (r.status >= 200 && r.status < 500) {
       checks.webhook = { url, status: r.status, supported: true }
       endpoints.push(url)
+      webhookFound = true
       healthScore += 30
       break
     }
   }
 
-  // ── Detect platform ───────────────────────────────────────────────────────────
+  // ── 4. Platform detection ─────────────────────────────────────────────────────
   let platform = 'custom'
   let detectedVersion: string | null = null
 
@@ -121,48 +138,76 @@ export async function POST(request: NextRequest) {
     healthScore += 20
     endpoints.push(`${base}/wp-json/wc/v3`)
     checks.platform = { detected: 'WooCommerce', version: detectedVersion }
+  } else {
+    // WordPress without WooCommerce credentials — check WP REST API
+    const wpBasicCheck = await probe(`${base}/wp-json`, {}, 4000)
+    if (wpBasicCheck.ok) {
+      platform = 'wordpress'
+      healthScore += 10
+      checks.platform = { detected: 'WordPress' }
+    }
   }
 
-  const shopifyCheck = await probe(`${base}/admin/api/2024-01/shop.json`, {}, 5000)
+  const shopifyCheck = await probe(`${base}/admin/api/2024-01/shop.json`, {}, 4000)
   if (shopifyCheck.status === 401) {
     platform = 'shopify'
     healthScore += 15
     checks.platform = { detected: 'Shopify' }
   }
 
-  if (healthScore >= 70) overallStatus = 'active'
-  else if (healthScore >= 30) overallStatus = 'warning'
-
-  // Cap score at 100
+  // ── 5. Calculate final status ─────────────────────────────────────────────────
   healthScore = Math.min(healthScore, 100)
 
-  // ── Persist discovery results if integration ID provided ──────────────────────
+  // "Connected" = site is reachable AND at least one endpoint found
+  // For custom PHP sites, finding the webhook endpoint is enough to confirm integration is live
+  const connected = siteReachable && (healthEndpoint || webhookFound || endpoints.length > 0)
+
+  let overallStatus: 'active' | 'warning' | 'error' = 'error'
+  if (healthScore >= 60) overallStatus = 'active'
+  else if (healthScore >= 20 && siteReachable) overallStatus = 'warning'
+
+  // ── 6. Generate human-readable recommendation ─────────────────────────────────
+  let recommendation: string
+  if (!siteReachable) {
+    recommendation = 'Website is unreachable. Check the URL is correct and the site is live.'
+  } else if (connected && healthEndpoint) {
+    recommendation = 'All systems detected successfully. Ready to connect!'
+  } else if (connected && webhookFound) {
+    recommendation = 'Website detected ✓ Webhook endpoint found. You can proceed — upload the PHP files via FileZilla if not done yet.'
+  } else if (siteReachable && endpoints.length > 0) {
+    recommendation = 'Website is reachable ✓ Upload the 4 PHP files via FileZilla, then run crm_migration.php to complete setup.'
+  } else if (siteReachable) {
+    recommendation = 'Website is reachable ✓ No integration endpoints detected yet. Upload the PHP files via FileZilla to complete setup.'
+  } else {
+    recommendation = 'Could not connect. Verify the URL and ensure the site is publicly accessible.'
+  }
+
+  // ── 7. Persist to DB if integration ID provided ───────────────────────────────
   if (id) {
     const admin = adminClient()
     await admin.from('website_integrations').update({
-      status:                overallStatus,
-      health_score:          healthScore,
-      discovered_version:    detectedVersion,
-      discovered_endpoints:  endpoints,
-      last_discovery_at:     new Date().toISOString(),
+      status:               overallStatus,
+      health_score:         healthScore,
+      discovered_version:   detectedVersion,
+      discovered_endpoints: endpoints,
+      last_discovery_at:    new Date().toISOString(),
       platform,
-      last_heartbeat_at:     new Date().toISOString(),
+      ...(siteReachable ? { last_heartbeat_at: new Date().toISOString() } : {}),
     }).eq('id', id).eq('user_id', user.id)
   }
 
   return NextResponse.json({
     success: true,
-    connected: healthOk,
+    connected,
+    site_reachable: siteReachable,
+    health_endpoint: healthEndpoint,
+    webhook_found: webhookFound,
     status: overallStatus,
     health_score: healthScore,
     platform,
     detected_version: detectedVersion,
     endpoints_found: endpoints,
     checks,
-    recommendation: !healthOk
-      ? 'Could not reach a health endpoint. Ensure the Website Integration plugin is installed and the URL is correct.'
-      : overallStatus === 'warning'
-      ? 'Partial connectivity. Webhook endpoint may not be configured.'
-      : 'All systems connected successfully.',
+    recommendation,
   })
 }

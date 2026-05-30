@@ -228,16 +228,37 @@ function AddIntegrationForm({ onCreated }: { onCreated: (data: Record<string, un
           </button>
           {testResult && (
             <div className={`rounded-lg border p-3 text-sm ${
-              (testResult.connected as boolean) ? "border-emerald-500/30 bg-emerald-500/10" : "border-amber-500/30 bg-amber-500/10"
+              (testResult.connected as boolean)
+                ? "border-emerald-500/30 bg-emerald-500/10"
+                : (testResult.site_reachable as boolean)
+                ? "border-blue-500/30 bg-blue-500/10"
+                : "border-amber-500/30 bg-amber-500/10"
             }`}>
-              <p className={(testResult.connected as boolean) ? "text-emerald-300" : "text-amber-300"}>
-                {(testResult.connected as boolean) ? "✓ Detected: " : "⚠ "}{String(testResult.recommendation ?? "")}
+              <p className={
+                (testResult.connected as boolean) ? "text-emerald-300"
+                : (testResult.site_reachable as boolean) ? "text-blue-300"
+                : "text-amber-300"
+              }>
+                {(testResult.connected as boolean) ? "✓ " : (testResult.site_reachable as boolean) ? "ℹ️ " : "⚠ "}
+                {String(testResult.recommendation ?? "")}
               </p>
               {Boolean(testResult.platform) && (
-                <p className="mt-1 text-slate-400 text-xs">Platform: {String(testResult.platform)} {testResult.detected_version ? `v${String(testResult.detected_version)}` : ""}</p>
+                <p className="mt-1 text-slate-400 text-xs">Platform detected: <strong>{String(testResult.platform)}</strong> {testResult.detected_version ? `v${String(testResult.detected_version)}` : ""}</p>
               )}
+              <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-500">
+                <span className={(testResult.site_reachable as boolean) ? "text-emerald-400" : "text-red-400"}>
+                  {(testResult.site_reachable as boolean) ? "✓" : "✗"} Site Reachable
+                </span>
+                <span className={(testResult.webhook_found as boolean) ? "text-emerald-400" : "text-slate-500"}>
+                  {(testResult.webhook_found as boolean) ? "✓" : "○"} Webhook Endpoint
+                </span>
+                <span className={(testResult.health_endpoint as boolean) ? "text-emerald-400" : "text-slate-500"}>
+                  {(testResult.health_endpoint as boolean) ? "✓" : "○"} Health Endpoint
+                </span>
+                <span>Score: <strong>{String(testResult.health_score ?? 0)}/100</strong></span>
+              </div>
               {Array.isArray(testResult.endpoints_found) && (testResult.endpoints_found as string[]).length > 0 && (
-                <p className="mt-1 text-slate-500 text-xs">Found: {(testResult.endpoints_found as string[]).length} endpoint(s)</p>
+                <p className="mt-1 text-slate-500 text-xs">Found: {(testResult.endpoints_found as string[]).join(", ")}</p>
               )}
             </div>
           )}
