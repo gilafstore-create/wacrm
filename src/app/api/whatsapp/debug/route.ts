@@ -159,6 +159,27 @@ export async function GET() {
     }
   }
 
+  // ── 8b. Schema columns check ──────────────────────────────────────
+  try {
+    const { error } = await adminClient()
+      .from('whatsapp_config')
+      .select('registered_at, subscribed_apps_at, last_registration_error')
+      .limit(1)
+    if (error) {
+      const missingColumn = error.message.match(/'(\w+)'\s+column/)?.[1]
+      checks['db.whatsapp_config.schema'] = {
+        ok: false,
+        detail: missingColumn
+          ? `Missing column '${missingColumn}'. Run this SQL in Supabase:\n\nALTER TABLE whatsapp_config\n  ADD COLUMN IF NOT EXISTS registered_at TIMESTAMPTZ,\n  ADD COLUMN IF NOT EXISTS subscribed_apps_at TIMESTAMPTZ,\n  ADD COLUMN IF NOT EXISTS last_registration_error TEXT;\nNOTIFY pgrst, 'reload schema';`
+          : `${error.code}: ${error.message}`,
+      }
+    } else {
+      checks['db.whatsapp_config.schema'] = { ok: true, detail: 'all required columns present' }
+    }
+  } catch (e) {
+    checks['db.whatsapp_config.schema'] = { ok: false, detail: String(e) }
+  }
+
   // ── 9. INSERT permission test (simulates real save) ───────────────
   if (userId) {
     try {

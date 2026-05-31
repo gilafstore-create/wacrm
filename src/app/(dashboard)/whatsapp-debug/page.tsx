@@ -93,13 +93,13 @@ export default function WhatsAppDebugPage() {
                     <p className="font-mono text-sm font-semibold text-white">
                       {name}
                     </p>
-                    <p
-                      className={`text-xs mt-1 break-all ${
+                    <pre
+                      className={`text-xs mt-1 whitespace-pre-wrap break-all font-sans ${
                         check.ok ? 'text-slate-400' : 'text-rose-300'
                       }`}
                     >
                       {check.detail}
-                    </p>
+                    </pre>
                   </div>
                 </div>
               </div>
