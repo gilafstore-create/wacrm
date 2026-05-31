@@ -193,18 +193,35 @@ export function WhatsAppConfig() {
         pin: pin.trim() || null,
       };
 
-      // Include Meta App Secret only if user actually typed a new value
-      if (metaSecretEdited && metaAppSecret !== MASKED_TOKEN && metaAppSecret.trim()) {
-        payload.meta_app_secret = metaAppSecret.trim();
+      // If Meta App Secret was edited, save it independently via its own endpoint
+      // (doesn't need access token re-entry — it's stored separately in app_config)
+      const secretChanged = metaSecretEdited && metaAppSecret !== MASKED_TOKEN && metaAppSecret.trim();
+      if (secretChanged) {
+        const secretRes = await fetch('/api/whatsapp/config/meta-secret', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ meta_app_secret: metaAppSecret.trim() }),
+        });
+        const secretData = await secretRes.json();
+        if (!secretRes.ok || !secretData.success) {
+          toast.error(secretData.error ?? 'Failed to save Meta App Secret');
+          setSaving(false);
+          return;
+        }
+        toast.success('Meta App Secret saved successfully.');
+        setMetaAppSecret(MASKED_TOKEN);
+        setMetaSecretEdited(false);
       }
 
       if (tokenEdited && accessToken !== MASKED_TOKEN && accessToken.trim()) {
         payload.access_token = accessToken.trim();
       } else if (config) {
-        // Existing config — reuse stored encrypted token by decrypting on the
-        // server. But our POST handler requires an access_token to verify
-        // with Meta. If the user didn't change the token, we need to signal
-        // that. Simplest: require token re-entry if they're updating.
+        // Access token not changed — if only the secret was updated, we're done
+        if (secretChanged) {
+          setSaving(false);
+          return;
+        }
+        // Other fields changed but no token — require re-entry to verify with Meta
         toast.error('Please re-enter the Access Token to save changes');
         setSaving(false);
         return;
