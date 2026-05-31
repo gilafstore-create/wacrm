@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
+import crypto from 'node:crypto'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -43,19 +44,12 @@ const CONFIG_KEYS = [
   'supabase_project_url',
   'supabase_anon_key',
   'supabase_service_role_key',
-  'supabase_jwt_secret',
-  'supabase_db_url',
-  'supabase_realtime_url',
-  'supabase_storage_bucket',
-  'supabase_storage_url',
-  'supabase_functions_url',
-  'supabase_project_ref',
+  'encryption_key',
 ] as const
 
 const SENSITIVE_KEYS = new Set([
   'supabase_service_role_key',
-  'supabase_jwt_secret',
-  'supabase_db_url',
+  'encryption_key',
 ])
 
 // ── ensure config table exists ────────────────────────────────────────────────
@@ -161,6 +155,30 @@ export async function POST(request: NextRequest) {
         checks,
         message: allPassed ? 'All checks passed — Supabase is reachable.' : 'Some checks failed. See details.',
       })
+    }
+
+    // ── GENERATE ENCRYPTION KEY ───────────────────────────────────────────────
+    if (action === 'generate-key') {
+      const { project_url, anon_key, service_role_key } = body
+
+      if (!project_url || !anon_key || !service_role_key) {
+        return NextResponse.json({
+          success: false,
+          error: 'Project URL, Anon Key and Service Role Key are required before generating.',
+        })
+      }
+      if (service_role_key.includes('••')) {
+        return NextResponse.json({
+          success: false,
+          error: 'Re-enter the Service Role Key (do not use the masked value).',
+        })
+      }
+
+      // Generate a cryptographically secure 64-character hex key
+      // Equivalent to: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+      const encryptionKey = crypto.randomBytes(32).toString('hex')
+
+      return NextResponse.json({ success: true, encryption_key: encryptionKey })
     }
 
     // ── SAVE CONFIG ───────────────────────────────────────────────────────────
