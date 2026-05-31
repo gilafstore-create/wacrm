@@ -226,7 +226,8 @@ export function WhatsAppConfig() {
       const data = await res.json();
 
       if (!res.ok) {
-        toast.error(data.error || 'Failed to save configuration');
+        const msg = data.error || `Server error ${res.status} — check /api/whatsapp/debug for details`;
+        toast.error(msg, { duration: 15000 });
         setSaving(false);
         return;
       }
