@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { decrypt, decryptAsync, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
+import { decryptAsync, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { normalizePhone, phonesMatch } from '@/lib/whatsapp/phone-utils'
 import { verifyMetaWebhookSignatureAsync } from '@/lib/whatsapp/webhook-signature'
@@ -184,11 +184,33 @@ export async function POST(request: Request) {
   const rawBody = await request.text()
   const signature = request.headers.get('x-hub-signature-256')
 
-  if (!await verifyMetaWebhookSignatureAsync(rawBody, signature)) {
+  // ──────────────────────────────────────────────────────────────
+  // TEMP FORENSIC LOGGING — remove once inbound pipeline confirmed.
+  // Proves: (1) Meta is delivering at all, (2) which event types,
+  // (3) phone_number_id, (4) signature header presence + match result.
+  // ──────────────────────────────────────────────────────────────
+  const reqId = `wh_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+  console.log(`[webhook][${reqId}] POST received at ${new Date().toISOString()} — sig_header_present: ${!!signature} — body_len: ${rawBody.length}`)
+  try {
+    const peek = JSON.parse(rawBody)
+    for (const e of peek.entry ?? []) {
+      for (const c of e.changes ?? []) {
+        const v = c.value ?? {}
+        console.log(`[webhook][${reqId}] field: ${c.field} — phone_number_id: ${v.metadata?.phone_number_id ?? 'n/a'} — has_messages: ${!!v.messages} — has_statuses: ${!!v.statuses} — msg_types: ${(v.messages ?? []).map((m: { type?: string }) => m.type).join(',') || 'none'} — from: ${(v.messages ?? []).map((m: { from?: string }) => m.from).join(',') || 'n/a'} — msg_ids: ${(v.messages ?? []).map((m: { id?: string }) => m.id).join(',') || 'n/a'}`)
+      }
+    }
+  } catch {
+    console.log(`[webhook][${reqId}] RAW (unparseable):`, rawBody.slice(0, 500))
+  }
+
+  const sigOk = await verifyMetaWebhookSignatureAsync(rawBody, signature)
+  console.log(`[webhook][${reqId}] signature_verified: ${sigOk} — env_secret_set: ${!!process.env.META_APP_SECRET}`)
+
+  if (!sigOk) {
     // 401 (not 200) — we want Meta's delivery dashboard to show failures
     // loudly if a misconfiguration causes signatures to stop matching,
     // rather than silently eating events.
-    console.warn('[webhook] rejected request with invalid signature')
+    console.warn(`[webhook][${reqId}] rejected request with invalid signature`)
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
   }
 
