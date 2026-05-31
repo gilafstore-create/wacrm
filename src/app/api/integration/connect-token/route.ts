@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
         success: true,
         message: 'Token already activated',
         api_key: existingKey?.api_key,
-        webhook_url: `${process.env.NEXT_PUBLIC_APP_URL ?? 'https://wacrm-wbjb.onrender.com'}/api/integration/webhook`,
+        webhook_url: `${process.env.NEXT_PUBLIC_APP_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? ''}/api/integration/webhook`,
         already_activated: true,
       })
     }
@@ -102,7 +102,7 @@ export async function POST(request: NextRequest) {
       integration_key_id: newKey.id,
     }).eq('id', tokenRecord.id)
 
-    const webhookUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? 'https://wacrm-wbjb.onrender.com'}/api/integration/webhook`
+    const webhookUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? ''}/api/integration/webhook`
 
     return NextResponse.json({
       success: true,
@@ -160,7 +160,7 @@ export async function PUT(request: NextRequest) {
       token: data.token,
       label: data.label,
       expires_at: data.expires_at,
-      webhook_url: `${process.env.NEXT_PUBLIC_APP_URL ?? 'https://wacrm-wbjb.onrender.com'}/api/integration/webhook`,
+      webhook_url: `${process.env.NEXT_PUBLIC_APP_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? ''}/api/integration/webhook`,
     })
 
   } catch (err) {

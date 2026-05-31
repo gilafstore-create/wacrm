@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
       .update(updatePayload)
       .eq('id', integration.id)
 
-    const wacrmBaseUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://wacrm-wbjb.onrender.com'
+    const wacrmBaseUrl = process.env.NEXT_PUBLIC_APP_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? ''
 
     // Return everything GilafStore needs to auto-configure
     return NextResponse.json({
