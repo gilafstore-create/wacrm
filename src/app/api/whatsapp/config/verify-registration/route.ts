@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { decryptAsync } from '@/lib/whatsapp/encryption'
 import {
   getSubscribedApps,
   verifyPhoneNumber,
@@ -54,7 +54,7 @@ export async function GET() {
 
   let accessToken: string
   try {
-    accessToken = decrypt(config.access_token)
+    accessToken = await decryptAsync(config.access_token)
   } catch {
     return NextResponse.json({
       live: false,
@@ -123,9 +123,10 @@ export async function GET() {
     )
   }
 
+  // live = token works + phone metadata OK + registered locally
+  // WABA subscription is best-effort (some system users can't query subscribed_apps)
   const live =
     checks.phone_metadata_ok &&
-    (checks.waba_subscribed_to_app ?? false) &&
     checks.locally_marked_registered
 
   return NextResponse.json({
