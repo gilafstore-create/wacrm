@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
+import { decrypt, decryptAsync, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { normalizePhone, phonesMatch } from '@/lib/whatsapp/phone-utils'
 import { verifyMetaWebhookSignatureAsync } from '@/lib/whatsapp/webhook-signature'
@@ -85,6 +85,8 @@ export async function GET(request: Request) {
     const challenge = searchParams.get('hub.challenge')
     const verifyToken = searchParams.get('hub.verify_token')
 
+    console.log('[webhook] verification request — mode:', mode, 'token_received:', verifyToken)
+
     if (mode !== 'subscribe' || !challenge || !verifyToken) {
       return NextResponse.json(
         { error: 'Missing verification parameters' },
@@ -92,39 +94,54 @@ export async function GET(request: Request) {
       )
     }
 
-    // Fetch all whatsapp configs to check verify tokens
+    // ── Check 1: env var WHATSAPP_VERIFY_TOKEN (fastest, no DB) ──────
+    const envToken = process.env.WHATSAPP_VERIFY_TOKEN
+    if (envToken) {
+      console.log('[webhook] checking env var WHATSAPP_VERIFY_TOKEN, match:', envToken.trim() === verifyToken.trim())
+      if (envToken.trim() === verifyToken.trim()) {
+        console.log('[webhook] verified via env var — returning challenge')
+        return new Response(challenge, {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain' },
+        })
+      }
+    }
+
+    // ── Check 2: DB rows (async decrypt with DB-key fallback) ─────────
     const { data: configs, error: configError } = await supabaseAdmin()
       .from('whatsapp_config')
       .select('id, verify_token')
 
-    if (configError || !configs) {
-      console.error('Error fetching configs for verification:', configError)
-      return NextResponse.json(
-        { error: 'Verification failed' },
-        { status: 403 }
-      )
+    if (configError) {
+      console.error('[webhook] error fetching configs for verification:', configError)
+      return NextResponse.json({ error: 'Verification failed' }, { status: 403 })
     }
 
-    // Check if any config's verify_token matches. Also collect the
-    // matching row so we can opportunistically upgrade its token to
-    // GCM if it was still in the legacy CBC format.
+    console.log('[webhook] checking', configs?.length ?? 0, 'DB row(s) for verify_token match')
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let matchedConfig: any = null
-    for (const config of configs) {
-      if (!config.verify_token) continue
+    for (const config of configs ?? []) {
+      if (!config.verify_token) {
+        console.log('[webhook] row', config.id, '— verify_token is NULL, skipping')
+        continue
+      }
       try {
-        if (decrypt(config.verify_token) === verifyToken) {
+        // Use async decrypt so DB-stored ENCRYPTION_KEY fallback works
+        const plainToken = await decryptAsync(config.verify_token)
+        const matches = plainToken.trim() === verifyToken.trim()
+        console.log('[webhook] row', config.id, '— decrypted token length:', plainToken.length, 'matches:', matches)
+        if (matches) {
           matchedConfig = config
           break
         }
-      } catch {
-        // Malformed / wrong-key token row — skip it and keep checking.
+      } catch (decryptErr) {
+        console.warn('[webhook] row', config.id, '— decrypt failed:', decryptErr instanceof Error ? decryptErr.message : decryptErr)
       }
     }
 
     if (matchedConfig) {
-      // Fire-and-forget GCM upgrade. Safe to run on every subscribe
-      // since it's a no-op once the column is already GCM.
+      // Fire-and-forget GCM upgrade if still in legacy CBC format
       if (isLegacyFormat(matchedConfig.verify_token)) {
         void supabaseAdmin()
           .from('whatsapp_config')
@@ -139,19 +156,20 @@ export async function GET(request: Request) {
             }
           })
       }
-      // Return challenge as plain text
+      console.log('[webhook] verified via DB row', matchedConfig.id, '— returning challenge')
       return new Response(challenge, {
         status: 200,
         headers: { 'Content-Type': 'text/plain' },
       })
     }
 
+    console.warn('[webhook] no matching verify_token found — env var set:', !!envToken, '— DB rows with token:', (configs ?? []).filter((c: { verify_token: string | null }) => c.verify_token).length)
     return NextResponse.json(
       { error: 'Verification token mismatch' },
       { status: 403 }
     )
   } catch (error) {
-    console.error('Error in webhook GET verification:', error)
+    console.error('[webhook] error in GET verification:', error)
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
