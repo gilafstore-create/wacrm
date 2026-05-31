@@ -65,7 +65,7 @@ async function resolveEncryptionKey(): Promise<string> {
 
     if (data?.value && data.value.length === 64) {
       _cachedKey = data.value
-      return _cachedKey
+      return data.value
     }
   } catch {
     // fall through to throw
