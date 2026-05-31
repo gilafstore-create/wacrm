@@ -3,9 +3,9 @@
  * ────────────────────────────────
  * Accepts a connection_token (gs_connect_xxx) from GilafStore.
  * Returns the full integration config so GilafStore can auto-configure itself.
+ * Also saves GilafStore's webhook URL so WACRM knows where to send events.
  *
  * This is a PUBLIC endpoint — no auth required (the token IS the auth).
- * Rate-limited by IP to prevent brute-force.
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
@@ -20,7 +20,7 @@ function adminClient() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { token, website_url } = body
+    const { token, website_url, webhook_url: incomingWebhookUrl } = body
 
     if (!token || typeof token !== 'string') {
       return NextResponse.json({ error: 'Connection token is required' }, { status: 400 })
@@ -48,19 +48,31 @@ export async function POST(request: NextRequest) {
     // Check if already activated — still return config (idempotent)
     const alreadyActivated = !!integration.token_used_at
 
-    // Mark token as used (if first time)
-    if (!alreadyActivated) {
-      await admin
-        .from('website_integrations')
-        .update({
-          token_used_at: new Date().toISOString(),
-          status: 'active',
-          updated_at: new Date().toISOString(),
-          // Optionally store the website URL that activated it
-          ...(website_url ? { website_url: website_url.replace(/\/$/, '') } : {}),
-        })
-        .eq('id', integration.id)
+    // Build the webhook URL that GilafStore tells us to use
+    // Priority: explicitly passed webhook_url > derived from website_url > existing
+    let gilafWebhookUrl = incomingWebhookUrl || null
+    if (!gilafWebhookUrl && website_url) {
+      gilafWebhookUrl = website_url.replace(/\/$/, '') + '/api/crm_webhook.php'
     }
+
+    // Build update payload
+    const updatePayload: Record<string, unknown> = {
+      token_used_at: integration.token_used_at || new Date().toISOString(),
+      status: 'active',
+      updated_at: new Date().toISOString(),
+    }
+    if (website_url) {
+      updatePayload.website_url = website_url.replace(/\/$/, '')
+    }
+    if (gilafWebhookUrl) {
+      updatePayload.webhook_url = gilafWebhookUrl
+    }
+
+    // Always update (saves webhook_url even on re-activation)
+    await admin
+      .from('website_integrations')
+      .update(updatePayload)
+      .eq('id', integration.id)
 
     const wacrmBaseUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://wacrm-wbjb.onrender.com'
 
@@ -69,7 +81,7 @@ export async function POST(request: NextRequest) {
       success: true,
       already_activated: alreadyActivated,
       message: alreadyActivated
-        ? 'Token was already activated. Returning existing configuration.'
+        ? 'Token was already activated. Configuration updated.'
         : 'Connection activated successfully! GilafStore is now linked to WACRM.',
 
       // Config for GilafStore to save
