@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { decryptAsync } from '@/lib/whatsapp/encryption'
 import {
   deleteMessageTemplate,
   editMessageTemplate,
@@ -135,7 +135,7 @@ export async function PATCH(
           { status: 400 },
         )
       }
-      const accessToken = decrypt(config.access_token)
+      const accessToken = await decryptAsync(config.access_token)
       try {
         await editMessageTemplate({
           metaTemplateId: existing.meta_template_id,
@@ -246,7 +246,7 @@ export async function DELETE(
           { status: 400 },
         )
       }
-      const accessToken = decrypt(config.access_token)
+      const accessToken = await decryptAsync(config.access_token)
       try {
         await deleteMessageTemplate({
           wabaId: config.waba_id,

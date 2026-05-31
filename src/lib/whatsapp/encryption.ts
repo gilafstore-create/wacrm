@@ -77,10 +77,10 @@ async function resolveEncryptionKey(): Promise<string> {
 }
 
 // Synchronous key — used by the sync encrypt/decrypt functions below.
-// Falls back gracefully: if the env var is missing, sync functions
-// will throw; callers that can go async should use encryptAsync/decryptAsync.
+// Falls back to _cachedKey so sync decrypt works after any async decrypt
+// has already populated the cache in the same process/request.
 function syncKey(): string {
-  const k = process.env.ENCRYPTION_KEY
+  const k = process.env.ENCRYPTION_KEY || _cachedKey
   if (!k) {
     throw new Error(
       'ENCRYPTION_KEY env var is not set. Use encryptAsync/decryptAsync for DB fallback, ' +

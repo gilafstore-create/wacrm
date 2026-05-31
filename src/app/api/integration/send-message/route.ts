@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { sendTemplateMessage, sendTextMessage } from '@/lib/whatsapp/meta-api'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { decryptAsync } from '@/lib/whatsapp/encryption'
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils'
 import { validateApiKey, applyRateLimit, getClientIP } from '@/lib/integration/middleware'
 
@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
 
     if (!waConfig) return NextResponse.json({ error: 'WhatsApp not configured' }, { status: 503 })
 
-    const accessToken = decrypt(waConfig.access_token)
+    const accessToken = await decryptAsync(waConfig.access_token)
     const sanitizedPhone = sanitizePhoneForMeta(phone)
 
     let metaResult: any

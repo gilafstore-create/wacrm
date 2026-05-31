@@ -276,7 +276,13 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
 
       const config = configRows[0]
 
-      const decryptedAccessToken = decrypt(config.access_token)
+      let decryptedAccessToken: string
+      try {
+        decryptedAccessToken = await decryptAsync(config.access_token)
+      } catch (err) {
+        console.error('[webhook] failed to decrypt access token for phone_number_id:', phoneNumberId, err)
+        continue
+      }
 
       for (let i = 0; i < value.messages.length; i++) {
         const message = value.messages[i]

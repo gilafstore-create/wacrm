@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { decryptAsync } from '@/lib/whatsapp/encryption'
 import { normalizeStatus } from '@/lib/whatsapp/template-status-normalize'
 import type { TemplateButton, TemplateSampleValues } from '@/types'
 
@@ -161,7 +161,7 @@ export async function POST() {
       )
     }
 
-    const accessToken = decrypt(config.access_token)
+    const accessToken = await decryptAsync(config.access_token)
 
     const metaTemplates: MetaTemplate[] = []
     let nextUrl:

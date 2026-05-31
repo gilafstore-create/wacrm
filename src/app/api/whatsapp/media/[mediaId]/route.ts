@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { decryptAsync } from '@/lib/whatsapp/encryption'
 
 export async function GET(
   request: Request,
@@ -45,7 +45,7 @@ export async function GET(
       )
     }
 
-    const accessToken = decrypt(config.access_token)
+    const accessToken = await decryptAsync(config.access_token)
 
     // Get the download URL from Meta
     const mediaInfo = await getMediaUrl({ mediaId, accessToken })
