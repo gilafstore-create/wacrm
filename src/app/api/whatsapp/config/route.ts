@@ -359,7 +359,10 @@ export async function POST(request: Request) {
       if (updateError) {
         console.error('Error updating whatsapp_config:', updateError)
         return NextResponse.json(
-          { error: 'Failed to update configuration' },
+          {
+            error: `DB update failed [${updateError.code}]: ${updateError.message}${updateError.hint ? ' — hint: ' + updateError.hint : ''}${updateError.details ? ' — ' + updateError.details : ''}`,
+            db_error: updateError,
+          },
           { status: 500 }
         )
       }
@@ -371,7 +374,10 @@ export async function POST(request: Request) {
       if (insertError) {
         console.error('Error inserting whatsapp_config:', insertError)
         return NextResponse.json(
-          { error: 'Failed to save configuration' },
+          {
+            error: `DB insert failed [${insertError.code}]: ${insertError.message}${insertError.hint ? ' — hint: ' + insertError.hint : ''}${insertError.details ? ' — ' + insertError.details : ''}`,
+            db_error: insertError,
+          },
           { status: 500 }
         )
       }

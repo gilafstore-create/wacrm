@@ -159,19 +159,58 @@ export async function GET() {
     }
   }
 
-  // ── 9. INSERT permission test ──────────────────────────────────────
+  // ── 9. INSERT permission test (simulates real save) ───────────────
   if (userId) {
     try {
       const supabase = await createClient()
-      // Try a no-op update to test write permission without mutating data
-      const { error } = await supabase
+      // Check existing row first
+      const { data: existing } = await supabase
         .from('whatsapp_config')
-        .update({ updated_at: new Date().toISOString() })
+        .select('id')
         .eq('user_id', userId)
-      if (error && error.code !== 'PGRST116') {
-        checks['db.whatsapp_config (write-test)'] = { ok: false, detail: `${error.code}: ${error.message}` }
+        .maybeSingle()
+
+      if (existing) {
+        // Try a no-op update on the real row
+        const { error } = await supabase
+          .from('whatsapp_config')
+          .update({ updated_at: new Date().toISOString() })
+          .eq('user_id', userId)
+        if (error) {
+          checks['db.whatsapp_config (write-test)'] = {
+            ok: false,
+            detail: `UPDATE failed [${error.code}]: ${error.message}${error.hint ? ' — hint: ' + error.hint : ''}`,
+          }
+        } else {
+          checks['db.whatsapp_config (write-test)'] = { ok: true, detail: 'UPDATE on existing row OK' }
+        }
       } else {
-        checks['db.whatsapp_config (write-test)'] = { ok: true, detail: 'write permission OK' }
+        // No row exists — try a real INSERT with dummy data, then immediately delete it
+        const testRow = {
+          user_id: userId,
+          phone_number_id: '__debug_test__',
+          waba_id: null,
+          access_token: 'test',
+          verify_token: null,
+          status: 'disconnected',
+        }
+        const { error: insertErr } = await supabase
+          .from('whatsapp_config')
+          .insert(testRow)
+        if (insertErr) {
+          checks['db.whatsapp_config (write-test)'] = {
+            ok: false,
+            detail: `INSERT failed [${insertErr.code}]: ${insertErr.message}${insertErr.hint ? ' — hint: ' + insertErr.hint : ''}${insertErr.details ? ' — ' + insertErr.details : ''}`,
+          }
+        } else {
+          // Clean up the test row
+          await supabase
+            .from('whatsapp_config')
+            .delete()
+            .eq('user_id', userId)
+            .eq('phone_number_id', '__debug_test__')
+          checks['db.whatsapp_config (write-test)'] = { ok: true, detail: 'INSERT permission OK (test row created and removed)' }
+        }
       }
     } catch (e) {
       checks['db.whatsapp_config (write-test)'] = { ok: false, detail: String(e) }

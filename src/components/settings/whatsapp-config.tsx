@@ -719,6 +719,14 @@ export function WhatsAppConfig() {
               </>
             )}
           </Button>
+          <a
+            href="/whatsapp-debug"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center justify-center gap-2 rounded-md border border-amber-700 bg-transparent px-4 py-2 text-sm font-medium text-amber-300 hover:bg-amber-900/30 hover:text-amber-100 transition-colors"
+          >
+            Run Diagnostic
+          </a>
           {config && (
             <Button
               variant="outline"
