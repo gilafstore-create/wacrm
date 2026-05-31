@@ -15,6 +15,7 @@ import {
   Zap,
   Workflow,
   Globe,
+  Database,
   Settings,
   LogOut,
   User,
@@ -52,7 +53,8 @@ const navItems: NavItem[] = [
   { href: "/broadcasts",   label: "Broadcasts",   icon: Radio },
   { href: "/automations",  label: "Automations",  icon: Zap },
   { href: "/flows",        label: "Flows",        icon: Workflow, beta: true },
-  { href: "/integrations", label: "Website Intg", icon: Globe },
+  { href: "/integrations",   label: "Website Intg",  icon: Globe },
+  { href: "/supabase-intg",  label: "Supabase Intg", icon: Database },
 ];
 
 const bottomNavItems = [
