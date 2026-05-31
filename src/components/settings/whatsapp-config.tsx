@@ -169,7 +169,7 @@ export function WhatsAppConfig() {
       toast.error('Phone Number ID is required');
       return;
     }
-    if (!config && (!accessToken.trim() || !tokenEdited)) {
+    if (!config && !accessToken.trim()) {
       toast.error('Access Token is required for initial setup');
       return;
     }
@@ -208,10 +208,10 @@ export function WhatsAppConfig() {
         setMetaSecretEdited(false);
       }
 
-      if (tokenEdited && accessToken !== MASKED_TOKEN && accessToken.trim()) {
+      if (accessToken && accessToken !== MASKED_TOKEN && accessToken.trim()) {
         payload.access_token = accessToken.trim();
       } else if (config && secretChanged) {
-        // Only secret changed — already saved above, nothing more to do
+        // Only secret changed on an existing config — already saved above, nothing more to do
         setSaving(false);
         return;
       }
