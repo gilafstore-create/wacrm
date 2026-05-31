@@ -57,6 +57,7 @@ export default function SupabaseIntgPage() {
         setSaved(c);
         setLastUpdated(data.lastUpdated ?? {});
         setConfigured(data.configured ?? false);
+        if (data.migration_needed) setMigrationNeeded(true);
       }
     } catch { /* ignore */ }
     finally   { setLoading(false); }
@@ -200,11 +201,15 @@ export default function SupabaseIntgPage() {
 
       {/* ── Migration SQL ── */}
       {migrationNeeded && (
-        <div className="rounded-xl bg-rose-500/10 border border-rose-500/20 p-4 space-y-3">
-          <p className="flex items-center gap-2 text-sm font-semibold text-rose-400">
-            <AlertTriangle className="h-4 w-4" /> Run this SQL in your Supabase SQL Editor first:
-          </p>
-          <pre className="text-xs text-slate-300 bg-slate-900 rounded-lg p-3 overflow-x-auto">{`CREATE TABLE IF NOT EXISTS public.app_config (
+        <div className="rounded-xl bg-rose-950 border-2 border-rose-500/60 p-5 space-y-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 text-rose-400 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-bold text-rose-300">One-time setup required — app_config table missing</p>
+              <p className="text-xs text-rose-400/80 mt-1">Run this SQL once in your Supabase SQL Editor, then come back and save.</p>
+            </div>
+          </div>
+          <pre className="text-xs text-slate-200 bg-slate-950 rounded-lg p-4 overflow-x-auto border border-slate-700 select-all">{`CREATE TABLE IF NOT EXISTS public.app_config (
   key        TEXT PRIMARY KEY,
   value      TEXT NOT NULL DEFAULT '',
   updated_by UUID REFERENCES auth.users(id),
@@ -214,10 +219,16 @@ ALTER TABLE public.app_config ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "auth_users_only" ON public.app_config
   FOR ALL USING (auth.role() = 'authenticated');`}
           </pre>
-          <a href="https://supabase.com/dashboard/project/_/sql" target="_blank" rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 text-sm text-emerald-400 hover:text-emerald-300">
-            <ExternalLink className="h-4 w-4" /> Open SQL Editor
-          </a>
+          <div className="flex items-center gap-3">
+            <a href="https://supabase.com/dashboard/project/_/sql" target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 transition-colors">
+              <ExternalLink className="h-4 w-4" /> Open SQL Editor
+            </a>
+            <button type="button" onClick={() => { setMigrationNeeded(false); load(); }}
+              className="flex items-center gap-2 rounded-lg bg-slate-700 px-4 py-2 text-sm font-medium text-slate-300 hover:bg-slate-600 transition-colors">
+              <RefreshCw className="h-4 w-4" /> I ran it — Retry
+            </button>
+          </div>
         </div>
       )}
 

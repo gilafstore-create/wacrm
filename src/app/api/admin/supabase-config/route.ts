@@ -77,9 +77,14 @@ export async function GET() {
       .in('key', CONFIG_KEYS as unknown as string[])
 
     if (error) {
-      // Table doesn't exist yet — return empty defaults
+      // Table doesn't exist yet — tell the UI to show migration SQL
       const empty = Object.fromEntries(CONFIG_KEYS.map(k => [k, '']))
-      return NextResponse.json({ success: true, config: empty, configured: false })
+      return NextResponse.json({
+        success: true,
+        config: empty,
+        configured: false,
+        migration_needed: true,
+      })
     }
 
     // Build masked response — never return sensitive keys in full
