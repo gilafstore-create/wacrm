@@ -79,6 +79,7 @@ export async function POST(request: NextRequest) {
   // ── 2. GilafStore-specific health endpoints ───────────────────────────────────
   const gilafHealthCandidates = [
     `${base}/admin/crm_heartbeat.php`,       // our new heartbeat cron endpoint
+    `${base}/api/crm_webhook.php`,           // GilafStore CRM webhook (GET = 405 = alive)
     `${base}/api/integration/health`,        // GilafStore WACRM proxy route
     `${base}/api/health`,
     `${base}/api/v1/status`,
@@ -105,6 +106,7 @@ export async function POST(request: NextRequest) {
 
   // ── 3. Webhook endpoint probe ─────────────────────────────────────────────────
   const webhookCandidates = [
+    `${base}/api/crm_webhook.php`,           // GilafStore Custom/PHP webhook
     `${base}/api/integration/webhook`,
     `${base}/api/wacrm-webhook`,
     `${base}/api/webhook`,
@@ -185,14 +187,25 @@ export async function POST(request: NextRequest) {
   // ── 7. Persist to DB if integration ID provided ───────────────────────────────
   if (id) {
     const admin = adminClient()
+    const now = new Date().toISOString()
     await admin.from('website_integrations').update({
       status:               overallStatus,
       health_score:         healthScore,
       discovered_version:   detectedVersion,
       discovered_endpoints: endpoints,
-      last_discovery_at:    new Date().toISOString(),
+      last_discovery_at:    now,
       platform,
-      ...(siteReachable ? { last_heartbeat_at: new Date().toISOString() } : {}),
+      updated_at:           now,
+      ...(siteReachable ? {
+        last_heartbeat_at:    now,
+        heartbeat_latency_ms: baseCheck.latency,
+        last_sync_at:         now,
+        last_error:           null,
+        last_error_at:        null,
+      } : {
+        last_error:    `Site unreachable: ${baseCheck.error}`,
+        last_error_at: now,
+      }),
     }).eq('id', id).eq('user_id', user.id)
   }
 

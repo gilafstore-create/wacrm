@@ -396,7 +396,7 @@ function IntegrationDetail({
     const r = await fetch("/api/integrations/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: intg.id, website_url: intg.website_url }),
+      body: JSON.stringify({ id: intg.id, website_url: intg.website_url, website_api_key: intg.website_api_key }),
     });
     const data = await r.json();
     setTestResult(data);

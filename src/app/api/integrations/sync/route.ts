@@ -37,6 +37,7 @@ async function deliverWebhook(
   secret: string,
   event: string,
   payload: Record<string, unknown>,
+  apiKey?: string,
 ) {
   const body = JSON.stringify({ event, data: payload, timestamp: Math.floor(Date.now() / 1000) })
   const sig = crypto.createHmac('sha256', secret).update(body).digest('hex')
@@ -54,6 +55,7 @@ async function deliverWebhook(
         'X-WACRM-Signature': sig,
         'X-WACRM-Event': event,
         'X-WACRM-Timestamp': String(Math.floor(Date.now() / 1000)),
+        ...(apiKey ? { 'X-WACRM-Key': apiKey } : {}),
       },
       body,
     })
@@ -87,7 +89,7 @@ export async function POST(request: NextRequest) {
 
     const { data: delivery } = await admin
       .from('website_webhook_deliveries')
-      .select('*, website_integrations(webhook_url, webhook_secret)')
+      .select('*, website_integrations(webhook_url, webhook_secret, website_api_key)')
       .eq('id', delivery_id)
       .eq('user_id', user.id)
       .maybeSingle()
@@ -102,6 +104,7 @@ export async function POST(request: NextRequest) {
       String(intg.webhook_secret ?? ''),
       String((delivery as Record<string, unknown>).event_type),
       (delivery as Record<string, unknown>).payload as Record<string, unknown> ?? {},
+      String(intg.website_api_key ?? ''),
     )
 
     await admin.from('website_webhook_deliveries').update({

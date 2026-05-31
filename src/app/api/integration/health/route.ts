@@ -79,6 +79,13 @@ export async function POST(request: NextRequest) {
     wa_online: waStatus === 'configured',
   })
 
+  // Update heartbeat on any matching website_integrations for this user
+  void admin.from('website_integrations').update({
+    last_heartbeat_at:    new Date().toISOString(),
+    heartbeat_latency_ms: 0,
+    heartbeat_enabled:    true,
+  }).eq('user_id', record.user_id).eq('status', 'active')
+
   return NextResponse.json({
     success: true,
     service: 'WACRM',
