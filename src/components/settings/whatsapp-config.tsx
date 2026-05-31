@@ -56,6 +56,7 @@ export function WhatsAppConfig() {
   const [metaAppSecret, setMetaAppSecret] = useState('');
   const [showMetaSecret, setShowMetaSecret] = useState(false);
   const [metaSecretEdited, setMetaSecretEdited] = useState(false);
+  const [pin, setPin] = useState('');
 
   // True once /register has succeeded on Meta's side (timestamp set
   // in the row). When false, the saved config is metadata-only and
@@ -184,6 +185,7 @@ export function WhatsAppConfig() {
         phone_number_id: phoneNumberId.trim(),
         waba_id: wabaId.trim() || null,
         verify_token: verifyToken.trim() || null,
+        pin: pin.trim() || null,
       };
 
       // If Meta App Secret was edited, save it independently via its own endpoint
@@ -208,17 +210,12 @@ export function WhatsAppConfig() {
 
       if (tokenEdited && accessToken !== MASKED_TOKEN && accessToken.trim()) {
         payload.access_token = accessToken.trim();
-      } else if (config) {
-        // Access token not changed — if only the secret was updated, we're done
-        if (secretChanged) {
-          setSaving(false);
-          return;
-        }
-        // Other fields changed but no token — require re-entry to verify with Meta
-        toast.error('Please re-enter the Access Token to save changes');
+      } else if (config && secretChanged) {
+        // Only secret changed — already saved above, nothing more to do
         setSaving(false);
         return;
       }
+      // If no new token provided, server will decrypt the stored token automatically
 
       const res = await fetch('/api/whatsapp/config', {
         method: 'POST',
@@ -251,6 +248,7 @@ export function WhatsAppConfig() {
             ? `Live — ${data.phone_info.verified_name} can now receive events.`
             : 'WhatsApp connected. Events will start flowing within a minute.',
         );
+        setPin('');
         // Mask the secret again after save
         if (metaSecretEdited && metaAppSecret.trim()) {
           setMetaAppSecret(MASKED_TOKEN);
@@ -646,6 +644,27 @@ export function WhatsAppConfig() {
               />
               <p className="text-xs text-slate-500">
                 A custom string you create. Must match the token you set in Meta webhook settings.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-slate-300">
+                Two-step verification PIN
+                {!isRegistered && <span className="ml-1 text-red-400">*</span>}
+              </Label>
+              <Input
+                type="text"
+                inputMode="numeric"
+                maxLength={6}
+                placeholder="6-digit PIN from Meta WhatsApp Manager"
+                value={pin}
+                onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 tracking-widest"
+              />
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Required the first time you connect a number. Set it in{' '}
+                <strong className="text-slate-300">Meta Business Manager → WhatsApp Accounts → Phone Numbers → Two-step verification</strong>.
+                Leave blank to keep an existing registration untouched.
               </p>
             </div>
 
