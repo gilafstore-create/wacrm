@@ -200,8 +200,60 @@ export async function POST(request: NextRequest) {
   // Update integration last_sync_at
   await admin.from('website_integrations').update({
     last_sync_at:           new Date().toISOString(),
-    total_synced_contacts:  intg.total_synced_contacts + synced,
+    total_synced_contacts:  (intg.total_synced_contacts ?? 0) + synced,
   }).eq('id', integrationId)
+
+  // ── Dispatch webhook to GilafStore ────────────────────────────────────────
+  if (intg.webhook_url) {
+    const webhookPayload = {
+      sync_id:      syncId,
+      entity_type,
+      synced,
+      failed,
+      total_contacts: (intg.total_synced_contacts ?? 0) + synced,
+      error:        syncError,
+    }
+
+    // Create delivery record first
+    const { data: delivery } = await admin.from('website_webhook_deliveries').insert({
+      integration_id: integrationId,
+      user_id:        user.id,
+      event_type:     syncError ? 'sync.failed' : 'sync.completed',
+      payload:        webhookPayload,
+      status:         'pending',
+      attempt:        1,
+    }).select('id').maybeSingle()
+
+    // Actually deliver the webhook
+    const webhookResult = await deliverWebhook(
+      intg.webhook_url,
+      intg.webhook_secret ?? '',
+      syncError ? 'sync.failed' : 'sync.completed',
+      webhookPayload,
+      intg.website_api_key ?? '',
+    )
+
+    // Update delivery record with result
+    if (delivery) {
+      await admin.from('website_webhook_deliveries').update({
+        http_status:   webhookResult.status,
+        response_body: webhookResult.body,
+        duration_ms:   webhookResult.latency,
+        status:        webhookResult.ok ? 'delivered' : 'failed',
+        completed_at:  new Date().toISOString(),
+        error_message: webhookResult.error,
+      }).eq('id', delivery.id)
+    }
+
+    // Update integration webhook counters
+    const counterUpdate: Record<string, unknown> = {
+      total_webhooks_sent: (intg.total_webhooks_sent ?? 0) + 1,
+    }
+    if (!webhookResult.ok) {
+      counterUpdate.total_webhooks_failed = (intg.total_webhooks_failed ?? 0) + 1
+    }
+    await admin.from('website_integrations').update(counterUpdate).eq('id', integrationId)
+  }
 
   return NextResponse.json({
     success: !syncError,

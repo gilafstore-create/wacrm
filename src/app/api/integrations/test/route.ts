@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
+import crypto from 'crypto'
 
 function adminClient() {
   return createClient(
@@ -207,6 +208,80 @@ export async function POST(request: NextRequest) {
         last_error_at: now,
       }),
     }).eq('id', id).eq('user_id', user.id)
+
+    // ── Send a test webhook if the integration has a webhook_url ──────────
+    if (webhookFound && siteReachable) {
+      const { data: intg } = await admin
+        .from('website_integrations')
+        .select('webhook_url, webhook_secret, website_api_key, total_webhooks_sent, total_webhooks_failed')
+        .eq('id', id).eq('user_id', user.id).maybeSingle()
+
+      if (intg?.webhook_url) {
+        const testPayload = {
+          type: 'test',
+          health_score: healthScore,
+          endpoints_found: endpoints.length,
+          platform,
+          timestamp: now,
+        }
+        const bodyStr = JSON.stringify({ event: 'integration.test', data: testPayload, timestamp: Math.floor(Date.now() / 1000) })
+        const sig = crypto.createHmac('sha256', intg.webhook_secret ?? '').update(bodyStr).digest('hex')
+
+        // Create delivery record
+        const { data: delivery } = await admin.from('website_webhook_deliveries').insert({
+          integration_id: id,
+          user_id: user.id,
+          event_type: 'integration.test',
+          payload: testPayload,
+          status: 'pending',
+          attempt: 1,
+        }).select('id').maybeSingle()
+
+        // Deliver
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), 10_000)
+        const start = Date.now()
+        let whResult = { ok: false, status: 0, body: '', latency: 0, error: 'Unknown' }
+        try {
+          const res = await fetch(intg.webhook_url, {
+            method: 'POST', signal: controller.signal,
+            headers: {
+              'Content-Type': 'application/json',
+              'X-WACRM-Signature': sig,
+              'X-WACRM-Event': 'integration.test',
+              'X-WACRM-Timestamp': String(Math.floor(Date.now() / 1000)),
+              ...(intg.website_api_key ? { 'X-WACRM-Key': intg.website_api_key } : {}),
+            },
+            body: bodyStr,
+          })
+          clearTimeout(timer)
+          let respBody = ''
+          try { respBody = await res.text() } catch { /* */ }
+          whResult = { ok: res.ok, status: res.status, body: respBody.slice(0, 500), latency: Date.now() - start, error: null as unknown as string }
+        } catch (err: unknown) {
+          clearTimeout(timer)
+          whResult = { ok: false, status: 0, body: '', latency: Date.now() - start, error: (err as Error).message }
+        }
+
+        // Update delivery record
+        if (delivery) {
+          await admin.from('website_webhook_deliveries').update({
+            http_status: whResult.status,
+            response_body: whResult.body,
+            duration_ms: whResult.latency,
+            status: whResult.ok ? 'delivered' : 'failed',
+            completed_at: new Date().toISOString(),
+            error_message: whResult.error,
+          }).eq('id', delivery.id)
+        }
+
+        // Update counters
+        await admin.from('website_integrations').update({
+          total_webhooks_sent: (intg.total_webhooks_sent ?? 0) + 1,
+          ...(!whResult.ok ? { total_webhooks_failed: (intg.total_webhooks_failed ?? 0) + 1 } : {}),
+        }).eq('id', id)
+      }
+    }
   }
 
   return NextResponse.json({

@@ -588,16 +588,23 @@ function IntegrationDetail({
           {intg.auto_sync_enabled && (
             <div>
               <label className="mb-2 block text-sm font-medium text-slate-300">Sync Interval</label>
-              <div className="grid grid-cols-4 gap-2">
-                {[1, 5, 15, 30].map(m => (
-                  <button key={m}
-                    onClick={() => updateSetting({ sync_interval_min: m })}
+              <div className="grid grid-cols-6 gap-2">
+                {[
+                  { val: 5, label: '5s' },
+                  { val: 10, label: '10s' },
+                  { val: 15, label: '15s' },
+                  { val: 30, label: '30s' },
+                  { val: 45, label: '45s' },
+                  { val: 60, label: '1m' },
+                ].map(opt => (
+                  <button key={opt.val}
+                    onClick={() => updateSetting({ sync_interval_min: opt.val })}
                     className={`rounded-lg border py-2 text-sm transition-colors ${
-                      intg.sync_interval_min === m
+                      intg.sync_interval_min === opt.val
                         ? "border-violet-500 bg-violet-500/20 text-violet-300"
                         : "border-slate-700 text-slate-400 hover:border-slate-600"
                     }`}
-                  >{m}m</button>
+                  >{opt.label}</button>
                 ))}
               </div>
             </div>
