@@ -54,6 +54,9 @@ export function WhatsAppConfig() {
   const [verifyToken, setVerifyToken] = useState('');
   const [pin, setPin] = useState('');
   const [tokenEdited, setTokenEdited] = useState(false);
+  const [metaAppSecret, setMetaAppSecret] = useState('');
+  const [showMetaSecret, setShowMetaSecret] = useState(false);
+  const [metaSecretEdited, setMetaSecretEdited] = useState(false);
 
   // True once /register has succeeded on Meta's side (timestamp set
   // in the row). When false, the saved config is metadata-only and
@@ -101,6 +104,13 @@ export function WhatsAppConfig() {
         setVerifyToken('');
         setPin('');
         setTokenEdited(false);
+        // Load masked secret indicator from DB via API
+        const secretRes = await fetch('/api/whatsapp/config/meta-secret', { method: 'GET' });
+        if (secretRes.ok) {
+          const secretData = await secretRes.json();
+          setMetaAppSecret(secretData.configured ? MASKED_TOKEN : '');
+        }
+        setMetaSecretEdited(false);
       } else {
         setConfig(null);
         setPhoneNumberId('');
@@ -109,6 +119,8 @@ export function WhatsAppConfig() {
         setVerifyToken('');
         setPin('');
         setTokenEdited(false);
+        setMetaAppSecret('');
+        setMetaSecretEdited(false);
       }
       // Clear any stale probe result when reloading the row.
       setRegistrationProbe(null);
@@ -181,6 +193,11 @@ export function WhatsAppConfig() {
         pin: pin.trim() || null,
       };
 
+      // Include Meta App Secret only if user actually typed a new value
+      if (metaSecretEdited && metaAppSecret !== MASKED_TOKEN && metaAppSecret.trim()) {
+        payload.meta_app_secret = metaAppSecret.trim();
+      }
+
       if (tokenEdited && accessToken !== MASKED_TOKEN && accessToken.trim()) {
         payload.access_token = accessToken.trim();
       } else if (config) {
@@ -228,6 +245,11 @@ export function WhatsAppConfig() {
         // re-register (which would void the active subscription if
         // the PIN became stale).
         setPin('');
+        // Mask the secret again after save
+        if (metaSecretEdited && metaAppSecret.trim()) {
+          setMetaAppSecret(MASKED_TOKEN);
+          setMetaSecretEdited(false);
+        }
       }
 
       if (user) await fetchConfig(user.id);
@@ -317,6 +339,8 @@ export function WhatsAppConfig() {
       setAccessToken('');
       setVerifyToken('');
       setTokenEdited(false);
+      setMetaAppSecret('');
+      setMetaSecretEdited(false);
       setConnectionStatus('disconnected');
       setResetReason(null);
       setStatusMessage('');
@@ -571,6 +595,41 @@ export function WhatsAppConfig() {
                   Token is hidden for security. Re-enter it to update configuration.
                 </p>
               )}
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-slate-300 flex items-center gap-2">
+                Meta App Secret
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded">SECRET</span>
+              </Label>
+              <div className="relative">
+                <Input
+                  type={showMetaSecret ? 'text' : 'password'}
+                  placeholder="Paste your Meta App Secret here"
+                  value={metaAppSecret}
+                  onChange={(e) => {
+                    setMetaAppSecret(e.target.value);
+                    setMetaSecretEdited(true);
+                  }}
+                  onFocus={() => {
+                    if (metaAppSecret === MASKED_TOKEN) {
+                      setMetaAppSecret('');
+                      setMetaSecretEdited(true);
+                    }
+                  }}
+                  className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowMetaSecret(!showMetaSecret)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition-colors"
+                >
+                  {showMetaSecret ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                </button>
+              </div>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Found in Meta Developers → Your App → App Settings → Basic → <strong className="text-slate-400">App Secret</strong>. Used to verify the HMAC-SHA256 signature on every inbound webhook. Without this, all incoming messages are rejected.
+              </p>
             </div>
 
             <div className="space-y-2">

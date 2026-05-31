@@ -142,7 +142,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json()
-    const { phone_number_id, waba_id, access_token, verify_token, pin } = body
+    const { phone_number_id, waba_id, access_token, verify_token, pin, meta_app_secret } = body
 
     if (!access_token || !phone_number_id) {
       return NextResponse.json(
@@ -338,6 +338,22 @@ export async function POST(request: Request) {
           { error: 'Failed to save configuration' },
           { status: 500 }
         )
+      }
+    }
+
+    // Persist Meta App Secret if provided (encrypted, stored in app_config)
+    if (meta_app_secret && typeof meta_app_secret === 'string' && meta_app_secret.trim().length >= 8) {
+      try {
+        const encryptedSecret = encrypt(meta_app_secret.trim())
+        await supabaseAdmin()
+          .from('app_config')
+          .upsert(
+            { key: 'meta_app_secret', value: encryptedSecret, updated_by: user.id, updated_at: new Date().toISOString() },
+            { onConflict: 'key' }
+          )
+      } catch (err) {
+        // Non-fatal — log but don't block the save response
+        console.warn('[whatsapp/config POST] Failed to save meta_app_secret:', err)
       }
     }
 
