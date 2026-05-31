@@ -142,13 +142,40 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json()
-    const { phone_number_id, waba_id, access_token, verify_token, pin, meta_app_secret } = body
+    const { phone_number_id, waba_id, access_token: raw_access_token, verify_token, pin, meta_app_secret } = body
 
-    if (!access_token || !phone_number_id) {
+    if (!phone_number_id) {
       return NextResponse.json(
-        { error: 'access_token and phone_number_id are required' },
+        { error: 'phone_number_id is required' },
         { status: 400 }
       )
+    }
+
+    // Resolve access token: use submitted value if provided and not masked,
+    // otherwise fall back to the stored (decrypted) token for the current user.
+    let access_token: string = raw_access_token
+    const isTokenMasked = !raw_access_token || String(raw_access_token).includes('\u2022')
+    if (isTokenMasked) {
+      // No new token provided — load stored one
+      const { data: existingRow } = await supabaseAdmin()
+        .from('whatsapp_config')
+        .select('access_token')
+        .eq('user_id', user.id)
+        .maybeSingle()
+      if (!existingRow?.access_token) {
+        return NextResponse.json(
+          { error: 'Access Token is required for initial setup.' },
+          { status: 400 }
+        )
+      }
+      try {
+        access_token = await decryptAsync(existingRow.access_token)
+      } catch {
+        return NextResponse.json(
+          { error: 'Stored token cannot be decrypted — please re-enter your Access Token.' },
+          { status: 400 }
+        )
+      }
     }
 
     if (pin !== undefined && pin !== null && pin !== '') {
@@ -205,8 +232,12 @@ export async function POST(request: Request) {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown Meta API error'
       console.error('Meta API verification failed during save:', message)
+      // Give actionable guidance for the most common mistake
+      const hint = message.includes('does not exist') || message.includes('missing permissions')
+        ? ' Make sure you entered the Phone Number ID (not the WABA ID or App ID). Find it in Meta Business Manager → WhatsApp → Phone Numbers.'
+        : ''
       return NextResponse.json(
-        { error: `Meta API error: ${message}` },
+        { error: `Meta API error: ${message}${hint}` },
         { status: 400 }
       )
     }
