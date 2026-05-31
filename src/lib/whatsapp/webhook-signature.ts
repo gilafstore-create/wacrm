@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { decryptAsync } from '@/lib/whatsapp/encryption'
 
 /**
  * Verify the HMAC-SHA256 signature Meta attaches to webhook POSTs.
@@ -92,7 +92,7 @@ export async function verifyMetaWebhookSignatureAsync(
       return false
     }
 
-    const secret = decrypt(data.value)
+    const secret = await decryptAsync(data.value)
     if (!secret) return false
 
     return timingSafeCompare(signatureHeader, computeSignature(secret, rawBody))
