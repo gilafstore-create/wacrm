@@ -60,42 +60,47 @@ export async function GET(request: NextRequest) {
           .gte('created_at', since),
       ])
 
-      const msgData = msgs.status === 'fulfilled' ? msgs.value.data ?? [] : []
-      const revData = revenue.status === 'fulfilled' ? revenue.value.data ?? [] : []
-      const whData  = webhooks.status === 'fulfilled' ? webhooks.value.data ?? [] : []
+      type MsgRow = { status: string }
+      type RevRow = { revenue: string | number | null; attributed_to: string | null; created_at: string }
+      type WhRow  = { status: string; event_type: string; duration_ms: number | null; created_at: string }
 
-      const totalRevenue = revData.reduce((s: number, r: any) => s + parseFloat(r.revenue ?? 0), 0)
-      const msgSent     = msgData.length
-      const msgFailed   = msgData.filter((m: any) => m.status === 'failed').length
+      const msgData = msgs.status === 'fulfilled' ? (msgs.value.data ?? []) as MsgRow[] : [] as MsgRow[]
+      const revData = revenue.status === 'fulfilled' ? (revenue.value.data ?? []) as RevRow[] : [] as RevRow[]
+      const whData  = webhooks.status === 'fulfilled' ? (webhooks.value.data ?? []) as WhRow[] : [] as WhRow[]
+
+      const totalRevenue = revData.reduce((s: number, r: RevRow) => s + parseFloat(String(r.revenue ?? 0)), 0)
+      const msgSent      = msgData.length
+      const msgFailed    = msgData.filter((m: MsgRow) => m.status === 'failed').length
       const deliveryRate = msgSent > 0 ? Math.round(((msgSent - msgFailed) / msgSent) * 100) : 0
 
-      const whSuccess = whData.filter((w: any) => w.status === 'delivered').length
-      const whFailed  = whData.filter((w: any) => w.status === 'failed').length
+      const whSuccess     = whData.filter((w: WhRow) => w.status === 'delivered').length
+      const whFailed      = whData.filter((w: WhRow) => w.status === 'failed').length
       const whSuccessRate = whData.length > 0 ? Math.round((whSuccess / whData.length) * 100) : 0
-      const avgLatency = whData.length > 0
-        ? Math.round(whData.reduce((s: number, w: any) => s + (w.duration_ms ?? 0), 0) / whData.length)
+      const avgLatency    = whData.length > 0
+        ? Math.round(whData.reduce((s: number, w: WhRow) => s + (w.duration_ms ?? 0), 0) / whData.length)
         : 0
 
       return NextResponse.json({
         success: true,
         period,
         overview: {
-          messages_sent:     msgSent,
-          messages_failed:   msgFailed,
-          delivery_rate:     deliveryRate,
-          total_revenue:     totalRevenue,
-          new_contacts:      contacts.status === 'fulfilled' ? contacts.value.count ?? 0 : 0,
-          webhooks_received: whData.length,
-          webhook_success_rate: whSuccessRate,
+          messages_sent:          msgSent,
+          messages_failed:        msgFailed,
+          delivery_rate:          deliveryRate,
+          total_revenue:          totalRevenue,
+          new_contacts:           contacts.status === 'fulfilled' ? contacts.value.count ?? 0 : 0,
+          webhooks_received:      whData.length,
+          webhooks_failed:        whFailed,
+          webhook_success_rate:   whSuccessRate,
           avg_webhook_latency_ms: avgLatency,
-          security_events:   secEvents.status === 'fulfilled' ? secEvents.value.data?.length ?? 0 : 0,
+          security_events:        secEvents.status === 'fulfilled' ? secEvents.value.data?.length ?? 0 : 0,
         },
-        revenue_by_attribution: revData.reduce((acc: any, r: any) => {
+        revenue_by_attribution: revData.reduce((acc: Record<string, number>, r: RevRow) => {
           const key = r.attributed_to ?? 'organic'
-          acc[key] = (acc[key] ?? 0) + parseFloat(r.revenue ?? 0)
+          acc[key] = (acc[key] ?? 0) + parseFloat(String(r.revenue ?? 0))
           return acc
         }, {}),
-        webhook_by_event: whData.reduce((acc: any, w: any) => {
+        webhook_by_event: whData.reduce((acc: Record<string, number>, w: WhRow) => {
           acc[w.event_type] = (acc[w.event_type] ?? 0) + 1
           return acc
         }, {}),

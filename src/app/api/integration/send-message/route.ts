@@ -4,7 +4,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
-import { sendTemplateMessage, sendTextMessage } from '@/lib/whatsapp/meta-api'
+import { sendTemplateMessage, sendTextMessage, type MetaSendResult } from '@/lib/whatsapp/meta-api'
 import { decryptAsync } from '@/lib/whatsapp/encryption'
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils'
 import { validateApiKey, applyRateLimit, getClientIP } from '@/lib/integration/middleware'
@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
     const accessToken = await decryptAsync(waConfig.access_token)
     const sanitizedPhone = sanitizePhoneForMeta(phone)
 
-    let metaResult: any
+    let metaResult: MetaSendResult | undefined
     if (template_name) {
       metaResult = await sendTemplateMessage({
         accessToken,

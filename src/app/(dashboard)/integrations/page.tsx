@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useCallback, type ReactNode } from "react";
 import {
-  Globe, Plus, CheckCircle2, AlertTriangle, XCircle, RefreshCw,
-  Zap, Webhook, BarChart3, Clock, Shield, Eye, EyeOff, Copy,
-  ChevronRight, Trash2, Activity, Wifi, WifiOff, Search,
-  Settings2, RotateCcw, Play, Loader2, Info, ExternalLink,
+  Globe, Plus, CheckCircle2, XCircle, RefreshCw,
+  Zap, Webhook, Clock, Shield, Eye, EyeOff, Copy,
+  ChevronRight, Trash2, Activity, Wifi, Search,
+  RotateCcw, Play, Loader2, Info, ExternalLink,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────

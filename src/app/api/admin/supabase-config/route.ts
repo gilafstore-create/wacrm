@@ -52,17 +52,6 @@ const SENSITIVE_KEYS = new Set([
   'encryption_key',
 ])
 
-// ── ensure config table exists ────────────────────────────────────────────────
-
-async function ensureConfigTable() {
-  const admin = adminClient()
-  // Try a simple select — if it fails with "does not exist" we create it
-  const { error } = await admin.from('app_config').select('key').limit(1)
-  if (error && error.message?.includes('does not exist')) {
-    await Promise.resolve(admin.rpc('create_app_config_table')).catch(() => null)
-  }
-}
-
 // ── GET ───────────────────────────────────────────────────────────────────────
 
 export async function GET() {

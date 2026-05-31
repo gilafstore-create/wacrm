@@ -6,7 +6,7 @@
  * Usage: node _e2e_test.mjs [--verbose]
  */
 import { readFileSync } from 'fs'
-import { createHmac, timingSafeEqual } from 'crypto'
+import { createHmac } from 'crypto'
 
 const VERBOSE = process.argv.includes('--verbose')
 
