@@ -52,7 +52,6 @@ export function WhatsAppConfig() {
   const [wabaId, setWabaId] = useState('');
   const [accessToken, setAccessToken] = useState('');
   const [verifyToken, setVerifyToken] = useState('');
-  const [pin, setPin] = useState('');
   const [tokenEdited, setTokenEdited] = useState(false);
   const [metaAppSecret, setMetaAppSecret] = useState('');
   const [showMetaSecret, setShowMetaSecret] = useState(false);
@@ -102,7 +101,6 @@ export function WhatsAppConfig() {
         setWabaId(data.waba_id || '');
         setAccessToken(MASKED_TOKEN);
         setVerifyToken('');
-        setPin('');
         setTokenEdited(false);
         // Load masked secret indicator from DB via API
         const secretRes = await fetch('/api/whatsapp/config/meta-secret', { method: 'GET' });
@@ -117,7 +115,6 @@ export function WhatsAppConfig() {
         setWabaId('');
         setAccessToken('');
         setVerifyToken('');
-        setPin('');
         setTokenEdited(false);
         setMetaAppSecret('');
         setMetaSecretEdited(false);
@@ -187,10 +184,6 @@ export function WhatsAppConfig() {
         phone_number_id: phoneNumberId.trim(),
         waba_id: wabaId.trim() || null,
         verify_token: verifyToken.trim() || null,
-        // Optional — only sent when the user filled it in. The server
-        // requires it on first save or when changing numbers; for a
-        // simple token rotation, leaving it blank skips re-register.
-        pin: pin.trim() || null,
       };
 
       // If Meta App Secret was edited, save it independently via its own endpoint
@@ -258,10 +251,6 @@ export function WhatsAppConfig() {
             ? `Live — ${data.phone_info.verified_name} can now receive events.`
             : 'WhatsApp connected. Events will start flowing within a minute.',
         );
-        // Clear the PIN so subsequent saves don't accidentally
-        // re-register (which would void the active subscription if
-        // the PIN became stale).
-        setPin('');
         // Mask the secret again after save
         if (metaSecretEdited && metaAppSecret.trim()) {
           setMetaAppSecret(MASKED_TOKEN);
@@ -504,15 +493,13 @@ export function WhatsAppConfig() {
                   <span className="text-red-300">
                     &quot;{lastRegistrationError}&quot;
                   </span>
-                  . Enter (or correct) the 2-step PIN below and click
-                  Save Configuration to retry.
+                  . Click Save Configuration to retry.
                 </>
               ) : (
                 <>
                   This number was saved before registration tracking
-                  existed, or registration was skipped. Enter the
-                  2-step PIN below and click Save Configuration to
-                  subscribe it.
+                  existed, or registration was skipped. Click Save
+                  Configuration to subscribe it.
                 </>
               )}
             </AlertDescription>
@@ -662,38 +649,6 @@ export function WhatsAppConfig() {
               </p>
             </div>
 
-            <div className="space-y-2">
-              <Label className="text-slate-300">
-                Two-step verification PIN
-                {!isRegistered && (
-                  <span className="ml-1 text-red-400">*</span>
-                )}
-              </Label>
-              <Input
-                type="text"
-                inputMode="numeric"
-                maxLength={6}
-                placeholder="6-digit PIN from Meta WhatsApp Manager"
-                value={pin}
-                onChange={(e) =>
-                  setPin(e.target.value.replace(/\D/g, '').slice(0, 6))
-                }
-                className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 tracking-widest"
-              />
-              <p className="text-xs text-slate-500 leading-relaxed">
-                Required the first time you connect a number, and any
-                time you swap to a different number. Set it in{' '}
-                <strong className="text-slate-300">
-                  Meta Business Manager → WhatsApp Accounts → Phone
-                  Numbers → Two-step verification
-                </strong>
-                . Without this PIN, Meta saves your credentials but
-                won&apos;t actually route inbound messages to wacrm —
-                the symptom that hits second numbers under a shared
-                WABA. Leave blank to keep an existing registration
-                untouched.
-              </p>
-            </div>
           </CardContent>
         </Card>
 
