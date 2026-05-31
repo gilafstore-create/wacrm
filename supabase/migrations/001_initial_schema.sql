@@ -203,7 +203,9 @@ CREATE TABLE IF NOT EXISTS whatsapp_config (
 
 ALTER TABLE whatsapp_config ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Users can manage own config" ON whatsapp_config;
-CREATE POLICY "Users can manage own config" ON whatsapp_config FOR ALL USING (auth.uid() = user_id);
+CREATE POLICY "Users can manage own config" ON whatsapp_config FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+GRANT ALL ON public.whatsapp_config TO authenticated;
+GRANT ALL ON public.whatsapp_config TO service_role;
 
 -- ============================================================
 -- MESSAGE_TEMPLATES
