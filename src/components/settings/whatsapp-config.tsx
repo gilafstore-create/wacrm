@@ -188,10 +188,15 @@ export function WhatsAppConfig() {
         pin: pin.trim() || null,
       };
 
+      // Determine whether a real (unmasked) access token was entered
+      const hasNewToken = !!(accessToken && accessToken !== MASKED_TOKEN && accessToken.trim());
+      if (hasNewToken) {
+        payload.access_token = accessToken.trim();
+      }
+
       // If Meta App Secret was edited, save it independently via its own endpoint
-      // (doesn't need access token re-entry — it's stored separately in app_config)
-      const secretChanged = metaSecretEdited && metaAppSecret !== MASKED_TOKEN && metaAppSecret.trim();
-      if (secretChanged) {
+      const secretOnlyChange = metaSecretEdited && metaAppSecret !== MASKED_TOKEN && !!metaAppSecret.trim();
+      if (secretOnlyChange) {
         const secretRes = await fetch('/api/whatsapp/config/meta-secret', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -206,16 +211,14 @@ export function WhatsAppConfig() {
         toast.success('Meta App Secret saved successfully.');
         setMetaAppSecret(MASKED_TOKEN);
         setMetaSecretEdited(false);
+        // If ONLY the secret changed (existing config, no other field touched), stop here
+        if (config && !hasNewToken && !pin.trim()) {
+          setSaving(false);
+          if (user) await fetchConfig(user.id);
+          return;
+        }
       }
-
-      if (accessToken && accessToken !== MASKED_TOKEN && accessToken.trim()) {
-        payload.access_token = accessToken.trim();
-      } else if (config && secretChanged) {
-        // Only secret changed on an existing config — already saved above, nothing more to do
-        setSaving(false);
-        return;
-      }
-      // If no new token provided, server will decrypt the stored token automatically
+      // If no new token in payload, server will decrypt the stored token automatically
 
       const res = await fetch('/api/whatsapp/config', {
         method: 'POST',
@@ -259,8 +262,9 @@ export function WhatsAppConfig() {
 
       if (user) await fetchConfig(user.id);
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error('Save error:', err);
-      toast.error('Failed to save configuration');
+      toast.error(`Save failed: ${msg}`, { duration: 20000 });
     } finally {
       setSaving(false);
     }
