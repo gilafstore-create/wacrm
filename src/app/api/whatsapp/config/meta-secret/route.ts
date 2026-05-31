@@ -15,7 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
-import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
+import { encryptAsync, decryptAsync } from '@/lib/whatsapp/encryption'
 
 function adminClient() {
   return createAdminClient(
@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
     // Encrypt before storing (same AES-256-GCM key used for WhatsApp tokens)
     let encrypted: string
     try {
-      encrypted = encrypt(meta_app_secret.trim())
+      encrypted = await encryptAsync(meta_app_secret.trim())
     } catch {
       return NextResponse.json({ error: 'Encryption failed — check ENCRYPTION_KEY env var.' }, { status: 500 })
     }
@@ -120,7 +120,7 @@ export async function getStoredMetaAppSecret(): Promise<string | null> {
       .maybeSingle()
 
     if (!data?.value) return null
-    return decrypt(data.value)
+    return decryptAsync(data.value)
   } catch {
     return null
   }

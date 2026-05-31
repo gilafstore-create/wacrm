@@ -6,7 +6,7 @@ import {
   subscribeWabaToApp,
   verifyPhoneNumber,
 } from '@/lib/whatsapp/meta-api'
-import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
+import { encryptAsync, decryptAsync } from '@/lib/whatsapp/encryption'
 
 // Lazy-initialised service-role client. We need it to detect a
 // phone_number_id already claimed by a *different* user — under RLS,
@@ -79,7 +79,7 @@ export async function GET() {
     // If this fails, the key changed (or was never consistent across envs).
     let accessToken: string
     try {
-      accessToken = decrypt(config.access_token)
+      accessToken = await decryptAsync(config.access_token)
     } catch (err) {
       console.error('[whatsapp/config GET] Token decryption failed:', err)
       return NextResponse.json(
@@ -210,8 +210,8 @@ export async function POST(request: Request) {
     let encryptedAccessToken: string
     let encryptedVerifyToken: string | null
     try {
-      encryptedAccessToken = encrypt(access_token)
-      encryptedVerifyToken = verify_token ? encrypt(verify_token) : null
+      encryptedAccessToken = await encryptAsync(access_token)
+      encryptedVerifyToken = verify_token ? await encryptAsync(verify_token) : null
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown encryption error'
       console.error('Encryption failed:', message)
@@ -344,7 +344,7 @@ export async function POST(request: Request) {
     // Persist Meta App Secret if provided (encrypted, stored in app_config)
     if (meta_app_secret && typeof meta_app_secret === 'string' && meta_app_secret.trim().length >= 8) {
       try {
-        const encryptedSecret = encrypt(meta_app_secret.trim())
+        const encryptedSecret = await encryptAsync(meta_app_secret.trim())
         await supabaseAdmin()
           .from('app_config')
           .upsert(
