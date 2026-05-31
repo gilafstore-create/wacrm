@@ -174,8 +174,13 @@ export async function POST(request: Request) {
 
     if (claimedError) {
       console.error('Error checking phone_number_id ownership:', claimedError)
+      const isPermission = claimedError.code === '42501'
       return NextResponse.json(
-        { error: 'Failed to validate configuration' },
+        {
+          error: isPermission
+            ? 'Database permission error: service_role cannot read whatsapp_config. Run: GRANT ALL ON public.whatsapp_config TO service_role; in Supabase SQL Editor.'
+            : `Failed to validate configuration: ${claimedError.message}`,
+        },
         { status: 500 }
       )
     }
