@@ -188,37 +188,16 @@ export function WhatsAppConfig() {
         pin: pin.trim() || null,
       };
 
-      // Determine whether a real (unmasked) access token was entered
-      const hasNewToken = !!(accessToken && accessToken !== MASKED_TOKEN && accessToken.trim());
-      if (hasNewToken) {
+      // Include access token if a real (unmasked) value was entered
+      if (accessToken && accessToken !== MASKED_TOKEN && accessToken.trim()) {
         payload.access_token = accessToken.trim();
       }
 
-      // If Meta App Secret was edited, save it independently via its own endpoint
-      const secretOnlyChange = metaSecretEdited && metaAppSecret !== MASKED_TOKEN && !!metaAppSecret.trim();
-      if (secretOnlyChange) {
-        const secretRes = await fetch('/api/whatsapp/config/meta-secret', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ meta_app_secret: metaAppSecret.trim() }),
-        });
-        const secretData = await secretRes.json();
-        if (!secretRes.ok || !secretData.success) {
-          toast.error(secretData.error ?? 'Failed to save Meta App Secret');
-          setSaving(false);
-          return;
-        }
-        toast.success('Meta App Secret saved successfully.');
-        setMetaAppSecret(MASKED_TOKEN);
-        setMetaSecretEdited(false);
-        // If ONLY the secret changed (existing config, no other field touched), stop here
-        if (config && !hasNewToken && !pin.trim()) {
-          setSaving(false);
-          if (user) await fetchConfig(user.id);
-          return;
-        }
+      // Include meta_app_secret in the same payload if edited — server handles it
+      if (metaSecretEdited && metaAppSecret !== MASKED_TOKEN && metaAppSecret.trim()) {
+        payload.meta_app_secret = metaAppSecret.trim();
       }
-      // If no new token in payload, server will decrypt the stored token automatically
+      // Server decrypts stored token automatically if no new token provided
 
       const res = await fetch('/api/whatsapp/config', {
         method: 'POST',
