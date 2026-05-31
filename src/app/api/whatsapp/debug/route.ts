@@ -33,11 +33,18 @@ export async function GET() {
     ok: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
     detail: process.env.SUPABASE_SERVICE_ROLE_KEY ? 'set' : 'MISSING',
   }
-  checks['env.ENCRYPTION_KEY'] = {
-    ok: !!process.env.ENCRYPTION_KEY,
-    detail: process.env.ENCRYPTION_KEY
-      ? `set (${process.env.ENCRYPTION_KEY.length} chars)`
-      : 'MISSING — will fall back to DB',
+  // ENCRYPTION_KEY: env var preferred but DB fallback is fine
+  if (process.env.ENCRYPTION_KEY) {
+    checks['env.ENCRYPTION_KEY'] = {
+      ok: true,
+      detail: `set in env var (${process.env.ENCRYPTION_KEY.length} chars)`,
+    }
+  } else {
+    // We'll check DB fallback in step 4 — mark this as ok with a note
+    checks['env.ENCRYPTION_KEY'] = {
+      ok: true,
+      detail: 'env var not set — will use DB fallback (see db.encryption_key check)',
+    }
   }
 
   // ── 2. Auth ────────────────────────────────────────────────────────
