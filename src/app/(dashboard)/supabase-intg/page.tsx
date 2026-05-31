@@ -38,6 +38,7 @@ export default function SupabaseIntgPage() {
   const [copied, setCopied]           = useState<string | null>(null);
   const [saveMsg, setSaveMsg]         = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [migrationNeeded, setMigrationNeeded] = useState(false);
+  const [migrationType, setMigrationType] = useState<'table_missing' | 'permission'>('table_missing');
 
   // ── Load ──────────────────────────────────────────────────────────────────
 
@@ -57,7 +58,10 @@ export default function SupabaseIntgPage() {
         setSaved(c);
         setLastUpdated(data.lastUpdated ?? {});
         setConfigured(data.configured ?? false);
-        if (data.migration_needed) setMigrationNeeded(true);
+        if (data.migration_needed) {
+          setMigrationNeeded(true);
+          setMigrationType(data.migration_type ?? 'table_missing');
+        }
       }
     } catch { /* ignore */ }
     finally   { setLoading(false); }
@@ -205,19 +209,49 @@ export default function SupabaseIntgPage() {
           <div className="flex items-start gap-3">
             <AlertTriangle className="h-5 w-5 text-rose-400 shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-bold text-rose-300">One-time setup required — app_config table missing</p>
-              <p className="text-xs text-rose-400/80 mt-1">Run this SQL once in your Supabase SQL Editor, then come back and save.</p>
+              <p className="text-sm font-bold text-rose-300">
+                {migrationType === 'permission'
+                  ? 'Permission denied — run this SQL to fix'
+                  : 'One-time setup required — app_config table missing'}
+              </p>
+              <p className="text-xs text-rose-400/80 mt-1">
+                {migrationType === 'permission'
+                  ? 'The app_config table exists but service_role lacks access. Run the SQL below in Supabase SQL Editor.'
+                  : 'Run this SQL once in your Supabase SQL Editor, then come back and save.'}
+              </p>
             </div>
           </div>
-          <pre className="text-xs text-slate-200 bg-slate-950 rounded-lg p-4 overflow-x-auto border border-slate-700 select-all">{`CREATE TABLE IF NOT EXISTS public.app_config (
+          <pre className="text-xs text-slate-200 bg-slate-950 rounded-lg p-4 overflow-x-auto border border-slate-700 select-all">
+            {migrationType === 'permission'
+              ? `-- Fix: grant service_role full access and disable RLS for service_role
+GRANT ALL ON public.app_config TO service_role;
+ALTER TABLE public.app_config ENABLE ROW LEVEL SECURITY;
+
+-- Drop old policy if it exists
+DROP POLICY IF EXISTS "auth_users_only" ON public.app_config;
+
+-- Allow authenticated users to read/write their own rows
+CREATE POLICY "auth_users_rw" ON public.app_config
+  FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
+
+-- Allow service_role to bypass RLS entirely (default in Supabase, but make explicit)
+ALTER TABLE public.app_config FORCE ROW LEVEL SECURITY;`
+              : `CREATE TABLE IF NOT EXISTS public.app_config (
   key        TEXT PRIMARY KEY,
   value      TEXT NOT NULL DEFAULT '',
   updated_by UUID REFERENCES auth.users(id),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ALTER TABLE public.app_config ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "auth_users_only" ON public.app_config
-  FOR ALL USING (auth.role() = 'authenticated');`}
+CREATE POLICY "auth_users_rw" ON public.app_config
+  FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
+GRANT ALL ON public.app_config TO service_role;`}
           </pre>
           <div className="flex items-center gap-3">
             <a href="https://supabase.com/dashboard/project/_/sql" target="_blank" rel="noopener noreferrer"

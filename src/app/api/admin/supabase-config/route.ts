@@ -77,13 +77,15 @@ export async function GET() {
       .in('key', CONFIG_KEYS as unknown as string[])
 
     if (error) {
-      // Table doesn't exist yet — tell the UI to show migration SQL
       const empty = Object.fromEntries(CONFIG_KEYS.map(k => [k, '']))
+      // 42P01 = table does not exist, 42501 = permission denied
+      const isPermissionError = error.code === '42501'
       return NextResponse.json({
         success: true,
         config: empty,
         configured: false,
         migration_needed: true,
+        migration_type: isPermissionError ? 'permission' : 'table_missing',
       })
     }
 
