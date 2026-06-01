@@ -35,6 +35,51 @@ export const TRIGGER_META: Record<AutomationTriggerType, TriggerMeta> = {
     label: 'Time-Based',
     pillClass: 'border-slate-500/30 bg-slate-500/10 text-slate-300',
   },
+  // ── E-commerce / integration triggers ──
+  order_placed: {
+    label: 'Order Placed',
+    pillClass: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+  },
+  order_confirmed: {
+    label: 'Order Confirmed',
+    pillClass: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+  },
+  order_shipped: {
+    label: 'Order Shipped',
+    pillClass: 'border-blue-500/30 bg-blue-500/10 text-blue-300',
+  },
+  order_delivered: {
+    label: 'Order Delivered',
+    pillClass: 'border-blue-500/30 bg-blue-500/10 text-blue-300',
+  },
+  order_cancelled: {
+    label: 'Order Cancelled',
+    pillClass: 'border-red-500/30 bg-red-500/10 text-red-300',
+  },
+  order_refunded: {
+    label: 'Order Refunded',
+    pillClass: 'border-red-500/30 bg-red-500/10 text-red-300',
+  },
+  payment_success: {
+    label: 'Payment Success',
+    pillClass: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+  },
+  payment_failed: {
+    label: 'Payment Failed',
+    pillClass: 'border-red-500/30 bg-red-500/10 text-red-300',
+  },
+  cart_abandoned: {
+    label: 'Cart Abandoned',
+    pillClass: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
+  },
+  customer_created: {
+    label: 'Customer Created',
+    pillClass: 'border-primary/30 bg-primary/10 text-primary',
+  },
+  customer_registered: {
+    label: 'Customer Registered',
+    pillClass: 'border-primary/30 bg-primary/10 text-primary',
+  },
 }
 
 export function triggerMeta(t: AutomationTriggerType | string): TriggerMeta {
