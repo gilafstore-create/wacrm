@@ -12,6 +12,7 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
+import { runIntegrationSync, type IntegrationRow } from '@/lib/integrations/sync-engine'
 
 function adminClient() {
   return createClient(
@@ -134,147 +135,78 @@ export async function POST(request: NextRequest) {
 
   if (!intg) return NextResponse.json({ error: 'Integration not found' }, { status: 404 })
 
-  // Create sync log entry
-  const { data: syncLog } = await admin.from('website_sync_log').insert({
-    integration_id: integrationId,
-    user_id:        user.id,
-    sync_type:      'manual',
-    entity_type,
-    status:         'running',
-  }).select('id').maybeSingle()
+  // Delegate to the shared sync engine — identical code path to the
+  // background scheduler, so manual and auto syncs behave the same.
+  const result = await runIntegrationSync(admin, intg as IntegrationRow, {
+    syncType: 'manual',
+    entityType: entity_type,
+  })
 
-  const syncId = syncLog?.id
-
-  // Attempt to fetch from website (GilafStore standard endpoints)
-  let synced = 0
-  let failed = 0
-  let syncError: string | null = null
-
-  try {
-    const base = intg.website_url
-    const apiKey = intg.website_api_key
-
-    if (entity_type === 'contacts' || entity_type === 'all') {
-      // Try GilafStore customer sync endpoint
-      const res = await fetch(`${base}/api/crm/customers?limit=100`, {
-        headers: { 'X-GilafStore-Key': apiKey, 'Accept': 'application/json' },
-        signal: AbortSignal.timeout(15_000),
-      }).catch(() => null)
-
-      if (res?.ok) {
-        const data: unknown = await res.json().catch(() => null)
-        const customers = Array.isArray(data)
-          ? data
-          : (data as Record<string, unknown>)?.customers as unknown[]
-        if (Array.isArray(customers)) {
-          // Upsert each customer into contacts
-          for (const c of customers.slice(0, 500)) {
-            const customer = c as Record<string, unknown>
-            try {
-              await admin.from('contacts').upsert({
-                user_id:     user.id,
-                name:        String(customer.name ?? customer.display_name ?? 'Unknown'),
-                phone:       String(customer.phone ?? customer.billing_phone ?? ''),
-                email:       String(customer.email ?? ''),
-                external_id: String(customer.id ?? ''),
-              }, { onConflict: 'user_id,external_id', ignoreDuplicates: false })
-              synced++
-            } catch { failed++ }
-          }
-        }
-      }
-    }
-  } catch (err: unknown) {
-    syncError = (err as Error).message
-  }
-
-  // Update sync log
-  await admin.from('website_sync_log').update({
-    records_synced: synced,
-    records_failed: failed,
-    status:         syncError ? 'failed' : 'completed',
-    error_message:  syncError,
-    completed_at:   new Date().toISOString(),
-  }).eq('id', syncId)
-
-  // Update integration last_sync_at
+  // Mirror the scheduler's diagnostics fields for manual runs too.
   await admin.from('website_integrations').update({
-    last_sync_at:           new Date().toISOString(),
-    total_synced_contacts:  (intg.total_synced_contacts ?? 0) + synced,
+    last_sync_attempt_at:      new Date().toISOString(),
+    last_sync_status:          result.error ? 'failed' : 'success',
+    last_sync_error:           result.error,
+    last_sync_duration_ms:     result.durationMs,
+    consecutive_sync_failures: result.error
+      ? ((intg.consecutive_sync_failures ?? 0) + 1)
+      : 0,
   }).eq('id', integrationId)
 
-  // ── Dispatch webhook to GilafStore ────────────────────────────────────────
-  if (intg.webhook_url) {
-    const webhookPayload = {
-      sync_id:      syncId,
-      entity_type,
-      synced,
-      failed,
-      total_contacts: (intg.total_synced_contacts ?? 0) + synced,
-      error:        syncError,
-    }
-
-    // Create delivery record first
-    const { data: delivery } = await admin.from('website_webhook_deliveries').insert({
-      integration_id: integrationId,
-      user_id:        user.id,
-      event_type:     syncError ? 'sync.failed' : 'sync.completed',
-      payload:        webhookPayload,
-      status:         'pending',
-      attempt:        1,
-    }).select('id').maybeSingle()
-
-    // Actually deliver the webhook
-    const webhookResult = await deliverWebhook(
-      intg.webhook_url,
-      intg.webhook_secret ?? '',
-      syncError ? 'sync.failed' : 'sync.completed',
-      webhookPayload,
-      intg.website_api_key ?? '',
-    )
-
-    // Update delivery record with result
-    if (delivery) {
-      await admin.from('website_webhook_deliveries').update({
-        http_status:   webhookResult.status,
-        response_body: webhookResult.body,
-        duration_ms:   webhookResult.latency,
-        status:        webhookResult.ok ? 'delivered' : 'failed',
-        completed_at:  new Date().toISOString(),
-        error_message: webhookResult.error,
-      }).eq('id', delivery.id)
-    }
-
-    // Update integration webhook counters
-    const counterUpdate: Record<string, unknown> = {
-      total_webhooks_sent: (intg.total_webhooks_sent ?? 0) + 1,
-    }
-    if (!webhookResult.ok) {
-      counterUpdate.total_webhooks_failed = (intg.total_webhooks_failed ?? 0) + 1
-    }
-    await admin.from('website_integrations').update(counterUpdate).eq('id', integrationId)
-  }
-
   return NextResponse.json({
-    success: !syncError,
-    sync_id: syncId,
-    synced,
-    failed,
-    error: syncError,
-    entity_type,
+    success: !result.error,
+    sync_id: result.syncId,
+    synced:  result.synced,
+    failed:  result.failed,
+    error:   result.error,
+    entity_type: result.entityType,
   })
 }
 
-// ── GET: webhook deliveries for an integration ────────────────────────────────
+// ── GET: webhook deliveries / sync logs / diagnostics ─────────────────────────
 export async function GET(request: NextRequest) {
   const user = await getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { searchParams } = new URL(request.url)
+  const action = searchParams.get('action')
   const integrationId = searchParams.get('integration_id')
 
   const admin = adminClient()
 
+  // ── Diagnostics: scheduler status ─────────────────────────────────────────
+  if (action === 'diagnostics') {
+    const { getLastTick, isLoopRunning } = await import('@/lib/integrations/scheduler')
+    const lastTick = getLastTick()
+
+    // Active sync jobs (integrations currently being synced)
+    const { data: active } = await admin
+      .from('website_sync_log')
+      .select('id, integration_id, sync_type, entity_type, started_at')
+      .eq('user_id', user.id)
+      .eq('status', 'running')
+      .order('started_at', { ascending: false })
+      .limit(10)
+
+    // Enabled integrations with their next_sync_at
+    const { data: enabled } = await admin
+      .from('website_integrations')
+      .select('id, website_name, auto_sync_enabled, sync_interval_min, next_sync_at, last_sync_attempt_at, last_sync_status, consecutive_sync_failures')
+      .eq('user_id', user.id)
+      .eq('auto_sync_enabled', true)
+      .order('next_sync_at', { ascending: true, nullsFirst: true })
+      .limit(20)
+
+    return NextResponse.json({
+      scheduler_running:       isLoopRunning(),
+      last_tick:               lastTick,
+      active_sync_jobs:        active ?? [],
+      enabled_integrations:    enabled ?? [],
+      server_time:             new Date().toISOString(),
+    })
+  }
+
+  // ── Webhook deliveries for a specific integration ─────────────────────────
   if (integrationId) {
     const { data } = await admin
       .from('website_webhook_deliveries')
@@ -286,7 +218,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ deliveries: data ?? [] })
   }
 
-  // Sync logs
+  // ── Sync logs (default) ────────────────────────────────────────────────────
   const { data: logs } = await admin
     .from('website_sync_log')
     .select('*')

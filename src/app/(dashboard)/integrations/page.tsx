@@ -34,6 +34,13 @@ interface Integration {
   created_at: string;
   website_api_key: string;
   connection_token: string | null;
+  // Scheduler diagnostics (migration 021)
+  next_sync_at: string | null;
+  last_sync_attempt_at: string | null;
+  last_sync_status: string | null;
+  last_sync_error: string | null;
+  last_sync_duration_ms: number | null;
+  consecutive_sync_failures: number;
 }
 
 interface WebhookDelivery {
@@ -631,6 +638,67 @@ function IntegrationDetail({
               ))}
             </div>
           </div>
+
+          {/* Sync Diagnostics */}
+          {intg.auto_sync_enabled && (
+            <div className="rounded-lg border border-slate-700 bg-slate-800/30 p-4">
+              <h3 className="mb-3 text-sm font-semibold text-slate-200">Sync Diagnostics</h3>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                  <p className="text-slate-500">Auto Sync Status</p>
+                  <p className="mt-0.5 font-medium text-slate-300">
+                    {intg.auto_sync_enabled ? "✓ Enabled" : "Disabled"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-slate-500">Sync Interval</p>
+                  <p className="mt-0.5 font-medium text-slate-300">{intg.sync_interval_min}s</p>
+                </div>
+                <div>
+                  <p className="text-slate-500">Next Scheduled Run</p>
+                  <p className="mt-0.5 font-medium text-slate-300">
+                    {intg.next_sync_at ? timeAgo(intg.next_sync_at) : "Not scheduled"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-slate-500">Last Attempt</p>
+                  <p className="mt-0.5 font-medium text-slate-300">
+                    {intg.last_sync_attempt_at ? timeAgo(intg.last_sync_attempt_at) : "Never"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-slate-500">Last Sync Status</p>
+                  <p className={`mt-0.5 font-medium ${
+                    intg.last_sync_status === "success" ? "text-emerald-400" : 
+                    intg.last_sync_status === "failed" ? "text-red-400" : "text-slate-400"
+                  }`}>
+                    {intg.last_sync_status === "success" ? "✓ Success" :
+                     intg.last_sync_status === "failed" ? "✗ Failed" : "—"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-slate-500">Duration</p>
+                  <p className="mt-0.5 font-medium text-slate-300">
+                    {intg.last_sync_duration_ms ? `${intg.last_sync_duration_ms}ms` : "—"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-slate-500">Consecutive Failures</p>
+                  <p className={`mt-0.5 font-medium ${
+                    intg.consecutive_sync_failures > 0 ? "text-amber-400" : "text-slate-400"
+                  }`}>
+                    {intg.consecutive_sync_failures}
+                  </p>
+                </div>
+              </div>
+              {intg.last_sync_error && (
+                <div className="mt-3 rounded border border-red-500/30 bg-red-500/10 px-2.5 py-2 text-xs text-red-300">
+                  <p className="font-medium">Last Error:</p>
+                  <p className="mt-0.5 font-mono opacity-90">{intg.last_sync_error}</p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

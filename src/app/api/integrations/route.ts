@@ -60,7 +60,9 @@ export async function GET() {
       last_sync_at, last_error, total_webhooks_sent, total_webhooks_failed,
       total_synced_contacts, total_synced_orders, discovered_version,
       created_at, updated_at,
-      website_api_key, website_secret, webhook_secret, connection_token, token_used_at
+      website_api_key, website_secret, webhook_secret, connection_token, token_used_at,
+      next_sync_at, last_sync_attempt_at, last_sync_status, last_sync_error,
+      last_sync_duration_ms, consecutive_sync_failures
     `)
     .eq('user_id', user.id)
     .order('created_at', { ascending: false })
