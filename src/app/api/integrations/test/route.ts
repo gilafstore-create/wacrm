@@ -65,49 +65,93 @@ export async function POST(request: NextRequest) {
   let siteReachable  = false   // base URL responds at all
   let healthEndpoint = false   // dedicated /health route found
   let webhookFound   = false   // webhook endpoint found (any 2xx-4xx)
-  let healthScore    = 0
+  
+  // Platform-agnostic health score breakdown
+  const healthBreakdown = {
+    connectivity: { score: 0, max: 20, checks: {} as Record<string, unknown> },
+    integration: { score: 0, max: 30, checks: {} as Record<string, unknown> },
+    sync_health: { score: 0, max: 20, checks: {} as Record<string, unknown> },
+    data_health: { score: 0, max: 15, checks: {} as Record<string, unknown> },
+    activity_health: { score: 0, max: 15, checks: {} as Record<string, unknown> },
+  }
+  let healthScore = 0
 
-  // ── 1. Check base URL reachable ──────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════════════
+  // CONNECTIVITY (20 points)
+  // ══════════════════════════════════════════════════════════════════════════════
   const baseCheck = await probe(base, {}, 8000)
   if (baseCheck.status > 0 || baseCheck.ok) {
     siteReachable = true
-    healthScore += 20
+    
+    // +10 Website reachable
+    healthBreakdown.connectivity.score += 10
+    healthBreakdown.connectivity.checks.reachable = true
+    
+    // +5 SSL valid (https)
+    if (base.startsWith('https://')) {
+      healthBreakdown.connectivity.score += 5
+      healthBreakdown.connectivity.checks.ssl_valid = true
+    }
+    
+    // +5 Response time acceptable (<2s)
+    if (baseCheck.latency && baseCheck.latency < 2000) {
+      healthBreakdown.connectivity.score += 5
+      healthBreakdown.connectivity.checks.response_time_ok = true
+    }
+    
     checks.site = { reachable: true, status: baseCheck.status, latency_ms: baseCheck.latency }
   } else {
     checks.site = { reachable: false, error: baseCheck.error }
+    healthBreakdown.connectivity.checks.reachable = false
   }
 
-  // ── 2. GilafStore-specific health endpoints ───────────────────────────────────
-  const gilafHealthCandidates = [
-    `${base}/admin/crm_heartbeat.php`,       // our new heartbeat cron endpoint
-    `${base}/api/crm_webhook.php`,           // GilafStore CRM webhook (GET = 405 = alive)
-    `${base}/api/integration/health`,        // GilafStore WACRM proxy route
-    `${base}/api/health`,
-    `${base}/api/v1/status`,
-    `${base}/api/v1/health`,
-    `${base}/health`,
+  // ══════════════════════════════════════════════════════════════════════════════
+  // INTEGRATION (30 points)
+  // ══════════════════════════════════════════════════════════════════════════════
+  
+  // +10 CRM endpoint reachable
+  const crmEndpointCandidates = [
+    `${base}/api/crm/customers`,
+    `${base}/api/customers`,
+    `${base}/wp-json/wc/v3/customers`,
+    `${base}/admin/api/2024-01/customers.json`,
   ]
-  for (const url of gilafHealthCandidates) {
+  for (const url of crmEndpointCandidates) {
     const headers: HeadersInit = { 'Accept': 'application/json' }
     if (website_api_key) headers['X-GilafStore-Key'] = website_api_key
     const r = await probe(url, { headers }, 6000)
-    // A 200 OR 401/403 means the endpoint EXISTS (401/403 = auth required = alive)
     if (r.status >= 200 && r.status < 500) {
-      checks.health = { url, status: r.status, latency_ms: r.latency }
+      healthBreakdown.integration.score += 10
+      healthBreakdown.integration.checks.crm_endpoint = { url, status: r.status }
       endpoints.push(url)
-      if (r.ok) {
-        healthEndpoint = true
-        healthScore += 30  // full health endpoint responding
-      } else {
-        healthScore += 15  // endpoint exists but requires auth — that's fine
-      }
+      break
+    }
+  }
+  
+  // +10 Health endpoint reachable
+  const healthEndpointCandidates = [
+    `${base}/health.php`,
+    `${base}/health`,
+    `${base}/api/health`,
+    `${base}/api/v1/health`,
+    `${base}/api/integration/health`,
+  ]
+  for (const url of healthEndpointCandidates) {
+    const headers: HeadersInit = { 'Accept': 'application/json' }
+    if (website_api_key) headers['X-GilafStore-Key'] = website_api_key
+    const r = await probe(url, { headers }, 6000)
+    if (r.status >= 200 && r.status < 500) {
+      healthEndpoint = true
+      healthBreakdown.integration.score += 10
+      healthBreakdown.integration.checks.health_endpoint = { url, status: r.status }
+      endpoints.push(url)
       break
     }
   }
 
-  // ── 3. Webhook endpoint probe ─────────────────────────────────────────────────
+  // +10 Webhook endpoint reachable
   const webhookCandidates = [
-    `${base}/api/crm_webhook.php`,           // GilafStore Custom/PHP webhook
+    `${base}/api/crm_webhook.php`,
     `${base}/api/integration/webhook`,
     `${base}/api/wacrm-webhook`,
     `${base}/api/webhook`,
@@ -120,17 +164,18 @@ export async function POST(request: NextRequest) {
       body: '{"event":"test"}',
       headers: { 'Content-Type': 'application/json' },
     }, 5000)
-    // Any response 200-499 means the URL exists (even 401/405 = endpoint is live)
     if (r.status >= 200 && r.status < 500) {
-      checks.webhook = { url, status: r.status, supported: true }
-      endpoints.push(url)
       webhookFound = true
-      healthScore += 30
+      healthBreakdown.integration.score += 10
+      healthBreakdown.integration.checks.webhook_endpoint = { url, status: r.status }
+      endpoints.push(url)
       break
     }
   }
 
-  // ── 4. Platform detection ─────────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════════════
+  // Platform detection (NO SCORING - detection only)
+  // ══════════════════════════════════════════════════════════════════════════════
   let platform = 'custom'
   let detectedVersion: string | null = null
 
@@ -138,15 +183,12 @@ export async function POST(request: NextRequest) {
   if (wpCheck.ok) {
     platform = 'woocommerce'
     detectedVersion = (wpCheck.body as Record<string, unknown>)?.['woocommerce_version'] as string ?? null
-    healthScore += 20
     endpoints.push(`${base}/wp-json/wc/v3`)
     checks.platform = { detected: 'WooCommerce', version: detectedVersion }
   } else {
-    // WordPress without WooCommerce credentials — check WP REST API
     const wpBasicCheck = await probe(`${base}/wp-json`, {}, 4000)
     if (wpBasicCheck.ok) {
       platform = 'wordpress'
-      healthScore += 10
       checks.platform = { detected: 'WordPress' }
     }
   }
@@ -154,11 +196,126 @@ export async function POST(request: NextRequest) {
   const shopifyCheck = await probe(`${base}/admin/api/2024-01/shop.json`, {}, 4000)
   if (shopifyCheck.status === 401) {
     platform = 'shopify'
-    healthScore += 15
     checks.platform = { detected: 'Shopify' }
   }
 
-  // ── 5. Calculate final status ─────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════════════
+  // SYNC HEALTH (20 points) - requires database data
+  // ══════════════════════════════════════════════════════════════════════════════
+  if (id) {
+    const admin = adminClient()
+    const { data: intg } = await admin
+      .from('website_integrations')
+      .select('auto_sync_enabled, last_sync_at, last_sync_status, last_sync_error, consecutive_sync_failures')
+      .eq('id', id)
+      .maybeSingle()
+    
+    if (intg) {
+      // +10 Last sync successful
+      if (intg.last_sync_status === 'success') {
+        healthBreakdown.sync_health.score += 10
+        healthBreakdown.sync_health.checks.last_sync_successful = true
+      } else if (intg.last_sync_error) {
+        healthBreakdown.sync_health.checks.last_sync_error = intg.last_sync_error
+      }
+      
+      // +5 Auto-sync enabled
+      if (intg.auto_sync_enabled) {
+        healthBreakdown.sync_health.score += 5
+        healthBreakdown.sync_health.checks.auto_sync_enabled = true
+      }
+      
+      // +5 Scheduler active (synced within last hour)
+      if (intg.last_sync_at) {
+        const lastSyncMs = Date.now() - new Date(intg.last_sync_at).getTime()
+        if (lastSyncMs < 3600000) { // 1 hour
+          healthBreakdown.sync_health.score += 5
+          healthBreakdown.sync_health.checks.scheduler_active = true
+        }
+      }
+    }
+  }
+  
+  // ══════════════════════════════════════════════════════════════════════════════
+  // DATA HEALTH (15 points) - requires database data
+  // ══════════════════════════════════════════════════════════════════════════════
+  if (id) {
+    const admin = adminClient()
+    const { data: intg } = await admin
+      .from('website_integrations')
+      .select('total_synced_contacts, total_synced_orders, consecutive_sync_failures')
+      .eq('id', id)
+      .maybeSingle()
+    
+    if (intg) {
+      // +5 Contacts syncing (at least 1)
+      if ((intg.total_synced_contacts ?? 0) > 0) {
+        healthBreakdown.data_health.score += 5
+        healthBreakdown.data_health.checks.contacts_syncing = true
+      }
+      
+      // +5 Orders syncing (at least 1)
+      if ((intg.total_synced_orders ?? 0) > 0) {
+        healthBreakdown.data_health.score += 5
+        healthBreakdown.data_health.checks.orders_syncing = true
+      }
+      
+      // +5 No consecutive failures
+      if ((intg.consecutive_sync_failures ?? 0) === 0) {
+        healthBreakdown.data_health.score += 5
+        healthBreakdown.data_health.checks.no_sync_failures = true
+      }
+    }
+  }
+  
+  // ══════════════════════════════════════════════════════════════════════════════
+  // ACTIVITY HEALTH (15 points) - requires database data
+  // ══════════════════════════════════════════════════════════════════════════════
+  if (id) {
+    const admin = adminClient()
+    const { data: intg } = await admin
+      .from('website_integrations')
+      .select('total_webhooks_sent, last_sync_at, last_heartbeat_at')
+      .eq('id', id)
+      .maybeSingle()
+    
+    if (intg) {
+      // +5 Recent webhook activity (sent at least 1)
+      if ((intg.total_webhooks_sent ?? 0) > 0) {
+        healthBreakdown.activity_health.score += 5
+        healthBreakdown.activity_health.checks.webhook_activity = true
+      }
+      
+      // +5 Recent successful sync (within 24h)
+      if (intg.last_sync_at) {
+        const lastSyncMs = Date.now() - new Date(intg.last_sync_at).getTime()
+        if (lastSyncMs < 86400000) { // 24 hours
+          healthBreakdown.activity_health.score += 5
+          healthBreakdown.activity_health.checks.recent_sync = true
+        }
+      }
+      
+      // +5 Heartbeat within threshold (within 10 min)
+      if (intg.last_heartbeat_at) {
+        const lastHeartbeatMs = Date.now() - new Date(intg.last_heartbeat_at).getTime()
+        if (lastHeartbeatMs < 600000) { // 10 minutes
+          healthBreakdown.activity_health.score += 5
+          healthBreakdown.activity_health.checks.heartbeat_active = true
+        }
+      }
+    }
+  }
+  
+  // ══════════════════════════════════════════════════════════════════════════════
+  // Calculate final score
+  // ══════════════════════════════════════════════════════════════════════════════
+  healthScore = 
+    healthBreakdown.connectivity.score +
+    healthBreakdown.integration.score +
+    healthBreakdown.sync_health.score +
+    healthBreakdown.data_health.score +
+    healthBreakdown.activity_health.score
+  
   healthScore = Math.min(healthScore, 100)
 
   // "Connected" = site is reachable AND at least one endpoint found
@@ -292,6 +449,7 @@ export async function POST(request: NextRequest) {
     webhook_found: webhookFound,
     status: overallStatus,
     health_score: healthScore,
+    health_breakdown: healthBreakdown,
     platform,
     detected_version: detectedVersion,
     endpoints_found: endpoints,
