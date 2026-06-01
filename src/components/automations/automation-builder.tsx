@@ -116,6 +116,18 @@ const TRIGGER_OPTIONS: { value: AutomationTriggerType; label: string; hint: stri
   { value: "conversation_assigned", label: "Conversation Assigned", hint: "When assigned to an agent" },
   { value: "tag_added", label: "Tag Added", hint: "When a tag is added to a contact" },
   { value: "time_based", label: "Time-Based", hint: "On a recurring schedule" },
+  // ── E-commerce / integration triggers ──
+  { value: "order_placed", label: "Order Placed", hint: "When a customer places a new order" },
+  { value: "order_confirmed", label: "Order Confirmed", hint: "When an order is confirmed" },
+  { value: "order_shipped", label: "Order Shipped", hint: "When an order is shipped" },
+  { value: "order_delivered", label: "Order Delivered", hint: "When an order is delivered" },
+  { value: "order_cancelled", label: "Order Cancelled", hint: "When an order is cancelled" },
+  { value: "order_refunded", label: "Order Refunded", hint: "When an order is refunded" },
+  { value: "payment_success", label: "Payment Success", hint: "When a payment succeeds" },
+  { value: "payment_failed", label: "Payment Failed", hint: "When a payment fails" },
+  { value: "cart_abandoned", label: "Cart Abandoned", hint: "When a checkout is abandoned" },
+  { value: "customer_created", label: "Customer Created", hint: "When a new customer is created" },
+  { value: "customer_registered", label: "Customer Registered", hint: "When a customer registers an account" },
 ]
 
 function cid(): string {
