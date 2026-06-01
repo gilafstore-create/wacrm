@@ -32,6 +32,7 @@ export interface IntegrationRow {
   webhook_url: string | null
   webhook_secret: string | null
   total_synced_contacts: number | null
+  total_synced_orders: number | null
   total_webhooks_sent: number | null
   total_webhooks_failed: number | null
 }
@@ -147,6 +148,53 @@ export async function runIntegrationSync(
         syncError = `Website returned HTTP ${res.status} from /api/crm/customers`
       } else {
         syncError = 'Website unreachable (request failed or timed out)'
+      }
+    }
+
+    // ── Orders sync ──────────────────────────────────────────────────────────
+    if ((entityType === 'orders' || entityType === 'all') && !syncError) {
+      const ordersRes = await fetch(`${base}/api/crm/orders?limit=100`, {
+        headers: { 'X-GilafStore-Key': apiKey, 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(15_000),
+      }).catch(() => null)
+
+      if (ordersRes?.ok) {
+        const ordersData: unknown = await ordersRes.json().catch(() => null)
+        const orders = Array.isArray(ordersData)
+          ? ordersData
+          : (ordersData as Record<string, unknown>)?.orders as unknown[]
+        if (Array.isArray(orders)) {
+          for (const o of orders.slice(0, 500)) {
+            const order = o as Record<string, unknown>
+            try {
+              // Ensure contact exists for this order's customer
+              const phone = String(order.customer_phone ?? '')
+              const email = String(order.customer_email ?? '')
+              const name = String(order.customer_name ?? 'Guest')
+              const externalUserId = String(order.user_id ?? '')
+
+              if (phone || email || externalUserId) {
+                await admin.from('contacts').upsert({
+                  user_id:     intg.user_id,
+                  name,
+                  phone:       phone || `order-${order.id}`,
+                  email,
+                  external_id: externalUserId || null,
+                }, { onConflict: 'user_id,external_id', ignoreDuplicates: true })
+              }
+
+              synced++
+            } catch { failed++ }
+          }
+
+          // Update order counter
+          await admin.from('website_integrations').update({
+            total_synced_orders: (intg.total_synced_orders ?? 0) + orders.length,
+          }).eq('id', intg.id)
+        }
+      } else if (ordersRes) {
+        // Non-fatal: orders endpoint may not exist yet on older sites
+        console.warn(`[sync-engine] Orders endpoint returned HTTP ${ordersRes.status} — skipping orders`)
       }
     }
   } catch (err: unknown) {
