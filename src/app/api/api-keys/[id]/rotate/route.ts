@@ -39,11 +39,12 @@ function hashApiKey(key: string): string {
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const user = await getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  const { id } = await params
   const body = await request.json()
   const reason = body.reason || 'Key rotation requested'
 
@@ -53,7 +54,7 @@ export async function POST(
   const { data: currentKey, error: fetchError } = await admin
     .from('api_keys')
     .select('*')
-    .eq('id', params.id)
+    .eq('id', id)
     .eq('user_id', user.id)
     .single()
 
@@ -94,7 +95,7 @@ export async function POST(
       rotation_count: (currentKey.rotation_count || 0) + 1,
       updated_at: new Date().toISOString(),
     })
-    .eq('id', params.id)
+    .eq('id', id)
     .eq('user_id', user.id)
     .select()
     .single()

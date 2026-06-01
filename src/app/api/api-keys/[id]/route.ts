@@ -32,16 +32,17 @@ async function getUser() {
 // GET /api/api-keys/:id - Get single API key
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const user = await getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  const { id } = await params
   const admin = adminClient()
   const { data, error } = await admin
     .from('api_keys')
     .select('id, key_name, key_prefix, key_type, expires_at, status, created_at, last_used_at, last_used_ip, last_used_user_agent, usage_count, ip_whitelist, ip_blacklist, domain_whitelist, rate_limit_per_minute, rate_limit_per_hour, scope, description, tags, last_rotated_at, rotation_count, updated_at')
-    .eq('id', params.id)
+    .eq('id', id)
     .eq('user_id', user.id)
     .single()
 
@@ -58,11 +59,12 @@ export async function GET(
 // PUT /api/api-keys/:id - Update API key
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const user = await getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  const { id } = await params
   const body = await request.json()
   const allowedFields = [
     'key_name',
@@ -91,7 +93,7 @@ export async function PUT(
   const { data, error } = await admin
     .from('api_keys')
     .update({ ...updateData, updated_at: new Date().toISOString() })
-    .eq('id', params.id)
+    .eq('id', id)
     .eq('user_id', user.id)
     .select()
     .single()
@@ -109,11 +111,12 @@ export async function PUT(
 // DELETE /api/api-keys/:id - Revoke API key
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const user = await getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  const { id } = await params
   const body = await request.json()
   const reason = body.reason || 'User requested revocation'
 
@@ -127,7 +130,7 @@ export async function DELETE(
       revoked_reason: reason,
       updated_at: new Date().toISOString(),
     })
-    .eq('id', params.id)
+    .eq('id', id)
     .eq('user_id', user.id)
     .select()
     .single()

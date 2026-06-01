@@ -27,11 +27,12 @@ async function getUser() {
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const user = await getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  const { id } = await params
   const { searchParams } = new URL(request.url)
   const period = searchParams.get('period') || '24h'
 
@@ -60,7 +61,7 @@ export async function GET(
   const { data: key, error: keyError } = await admin
     .from('api_keys')
     .select('id, user_id')
-    .eq('id', params.id)
+    .eq('id', id)
     .eq('user_id', user.id)
     .single()
 
@@ -72,7 +73,7 @@ export async function GET(
   const { data: logs, error: logsError } = await admin
     .from('api_key_usage_logs')
     .select('endpoint, method, status_code, response_time_ms, created_at')
-    .eq('key_id', params.id)
+    .eq('key_id', id)
     .gte('created_at', periodStart.toISOString())
     .order('created_at', { ascending: false })
     .limit(1000)
