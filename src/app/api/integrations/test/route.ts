@@ -200,105 +200,65 @@ export async function POST(request: NextRequest) {
   }
 
   // ══════════════════════════════════════════════════════════════════════════════
-  // SYNC HEALTH (20 points) - requires database data
+  // SYNC HEALTH + DATA HEALTH + ACTIVITY HEALTH — single DB read
   // ══════════════════════════════════════════════════════════════════════════════
   if (id) {
     const admin = adminClient()
     const { data: intg } = await admin
       .from('website_integrations')
-      .select('auto_sync_enabled, last_sync_at, last_sync_status, last_sync_error, consecutive_sync_failures')
+      .select('auto_sync_enabled, last_sync_at, last_sync_status, last_sync_error, consecutive_sync_failures, total_synced_contacts, total_synced_orders, total_webhooks_sent, last_heartbeat_at')
       .eq('id', id)
       .maybeSingle()
     
     if (intg) {
-      // +10 Last sync successful
+      // ── Sync Health ──
       if (intg.last_sync_status === 'success') {
         healthBreakdown.sync_health.score += 10
         healthBreakdown.sync_health.checks.last_sync_successful = true
       } else if (intg.last_sync_error) {
         healthBreakdown.sync_health.checks.last_sync_error = intg.last_sync_error
       }
-      
-      // +5 Auto-sync enabled
       if (intg.auto_sync_enabled) {
         healthBreakdown.sync_health.score += 5
         healthBreakdown.sync_health.checks.auto_sync_enabled = true
       }
-      
-      // +5 Scheduler active (synced within last hour)
       if (intg.last_sync_at) {
         const lastSyncMs = Date.now() - new Date(intg.last_sync_at).getTime()
-        if (lastSyncMs < 3600000) { // 1 hour
+        if (lastSyncMs < 3600000) {
           healthBreakdown.sync_health.score += 5
           healthBreakdown.sync_health.checks.scheduler_active = true
         }
       }
-    }
-  }
-  
-  // ══════════════════════════════════════════════════════════════════════════════
-  // DATA HEALTH (15 points) - requires database data
-  // ══════════════════════════════════════════════════════════════════════════════
-  if (id) {
-    const admin = adminClient()
-    const { data: intg } = await admin
-      .from('website_integrations')
-      .select('total_synced_contacts, total_synced_orders, consecutive_sync_failures')
-      .eq('id', id)
-      .maybeSingle()
-    
-    if (intg) {
-      // +5 Contacts syncing (at least 1)
+      
+      // ── Data Health ──
       if ((intg.total_synced_contacts ?? 0) > 0) {
         healthBreakdown.data_health.score += 5
         healthBreakdown.data_health.checks.contacts_syncing = true
       }
-      
-      // +5 Orders syncing (at least 1)
       if ((intg.total_synced_orders ?? 0) > 0) {
         healthBreakdown.data_health.score += 5
         healthBreakdown.data_health.checks.orders_syncing = true
       }
-      
-      // +5 No consecutive failures
       if ((intg.consecutive_sync_failures ?? 0) === 0) {
         healthBreakdown.data_health.score += 5
         healthBreakdown.data_health.checks.no_sync_failures = true
       }
-    }
-  }
-  
-  // ══════════════════════════════════════════════════════════════════════════════
-  // ACTIVITY HEALTH (15 points) - requires database data
-  // ══════════════════════════════════════════════════════════════════════════════
-  if (id) {
-    const admin = adminClient()
-    const { data: intg } = await admin
-      .from('website_integrations')
-      .select('total_webhooks_sent, last_sync_at, last_heartbeat_at')
-      .eq('id', id)
-      .maybeSingle()
-    
-    if (intg) {
-      // +5 Recent webhook activity (sent at least 1)
+      
+      // ── Activity Health ──
       if ((intg.total_webhooks_sent ?? 0) > 0) {
         healthBreakdown.activity_health.score += 5
         healthBreakdown.activity_health.checks.webhook_activity = true
       }
-      
-      // +5 Recent successful sync (within 24h)
       if (intg.last_sync_at) {
         const lastSyncMs = Date.now() - new Date(intg.last_sync_at).getTime()
-        if (lastSyncMs < 86400000) { // 24 hours
+        if (lastSyncMs < 86400000) {
           healthBreakdown.activity_health.score += 5
           healthBreakdown.activity_health.checks.recent_sync = true
         }
       }
-      
-      // +5 Heartbeat within threshold (within 10 min)
       if (intg.last_heartbeat_at) {
         const lastHeartbeatMs = Date.now() - new Date(intg.last_heartbeat_at).getTime()
-        if (lastHeartbeatMs < 600000) { // 10 minutes
+        if (lastHeartbeatMs < 600000) {
           healthBreakdown.activity_health.score += 5
           healthBreakdown.activity_health.checks.heartbeat_active = true
         }
@@ -357,7 +317,6 @@ export async function POST(request: NextRequest) {
       ...(siteReachable ? {
         last_heartbeat_at:    now,
         heartbeat_latency_ms: baseCheck.latency,
-        last_sync_at:         now,
         last_error:           null,
         last_error_at:        null,
       } : {
