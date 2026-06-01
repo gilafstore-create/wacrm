@@ -299,7 +299,20 @@ export type AutomationTriggerType =
   | 'new_contact_created'
   | 'conversation_assigned'
   | 'tag_added'
-  | 'time_based';
+  | 'time_based'
+  // ── E-commerce / integration triggers (fired via integration webhook) ──
+  | 'order_placed'
+  | 'order_confirmed'
+  | 'order_shipped'
+  | 'order_delivered'
+  | 'order_cancelled'
+  | 'order_refunded'
+  | 'payment_success'
+  | 'payment_failed'
+  | 'cart_abandoned'
+  | 'customer_created'
+  | 'customer_registered';
+
 
 export type AutomationStepType =
   | 'send_message'

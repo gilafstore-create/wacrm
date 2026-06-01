@@ -293,7 +293,7 @@ async function findContactByPhone(admin: any, phone: string, ownerUserId: string
   const normalized = phone.replace(/\D/g, '').slice(-10)
   const { data } = await admin
     .from('contacts')
-    .select('id, name, phone, email')
+    .select('id, name, phone, email, user_id')
     .eq('user_id', ownerUserId)
     .ilike('phone', `%${normalized}`)
     .limit(1)
@@ -309,12 +309,12 @@ async function findOrCreateContact(
 ) {
   // Match order: local_user_id → email → phone
   if (info.local_user_id) {
-    const { data } = await admin.from('contacts').select('id, name, phone, email')
+    const { data } = await admin.from('contacts').select('id, name, phone, email, user_id')
       .eq('user_id', ownerUserId).eq('external_id', String(info.local_user_id)).maybeSingle()
     if (data) return data
   }
   if (info.email) {
-    const { data } = await admin.from('contacts').select('id, name, phone, email')
+    const { data } = await admin.from('contacts').select('id, name, phone, email, user_id')
       .eq('user_id', ownerUserId).eq('email', info.email).maybeSingle()
     if (data) return data
   }
