@@ -69,29 +69,58 @@ export async function validateApiKey(
   if (!apiKey) return { record: null, error: 'Missing API key' }
 
   const admin = supabaseAdmin()
+  
+  // 1. Try standard integration_keys (gcrm_...)
   const { data, error } = await admin
     .from('integration_keys')
     .select('id, user_id, api_key, api_secret, is_bcrypt, is_active, revoked_at, expires_at, permissions')
     .eq('api_key', apiKey)
     .maybeSingle()
 
-  if (error || !data) return { record: null, error: 'Invalid API key' }
+  if (!error && data) {
+    // Check revoked
+    if (data.revoked_at) return { record: null, error: 'API key has been revoked' }
+    // Check expired
+    if (data.expires_at && new Date(data.expires_at) < new Date()) {
+      return { record: null, error: 'API key has expired' }
+    }
+    // Check active
+    if (!data.is_active) return { record: null, error: 'API key is inactive' }
 
-  // Check revoked
-  if (data.revoked_at) return { record: null, error: 'API key has been revoked' }
+    // Update last_used_at (fire-and-forget)
+    void admin.from('integration_keys').update({ last_used_at: new Date().toISOString() }).eq('id', data.id)
 
-  // Check expired
-  if (data.expires_at && new Date(data.expires_at) < new Date()) {
-    return { record: null, error: 'API key has expired' }
+    return { record: data as ApiKeyRecord, error: null }
   }
 
-  // Check active
-  if (!data.is_active) return { record: null, error: 'API key is inactive' }
+  // 2. Try website_integrations (gs_live_...)
+  if (apiKey.startsWith('gs_live_') || apiKey.startsWith('gs_test_')) {
+    const { data: webData, error: webError } = await admin
+      .from('website_integrations')
+      .select('id, user_id, website_api_key, website_secret, status')
+      .eq('website_api_key', apiKey)
+      .maybeSingle()
 
-  // Update last_used_at (fire-and-forget)
-  void admin.from('integration_keys').update({ last_used_at: new Date().toISOString() }).eq('id', data.id)
+    if (!webError && webData) {
+      if (webData.status !== 'active') return { record: null, error: 'Integration is inactive' }
+      return {
+        record: {
+          id: webData.id,
+          user_id: webData.user_id,
+          api_key: webData.website_api_key,
+          api_secret: webData.website_secret,
+          is_bcrypt: false,
+          is_active: true,
+          revoked_at: null,
+          expires_at: null,
+          permissions: ['*'],
+        } as ApiKeyRecord,
+        error: null,
+      }
+    }
+  }
 
-  return { record: data as ApiKeyRecord, error: null }
+  return { record: null, error: 'Invalid API key' }
 }
 
 // ── Apply rate limit for a route ──────────────────────────────────────────────
