@@ -463,16 +463,35 @@ async function resolveConversationId(args: ExecuteArgs): Promise<string> {
   const fromCtx = args.context.conversation_id
   if (fromCtx) return fromCtx
   if (!args.contactId) throw new Error('cannot resolve conversation: no contact')
-  const { data, error } = await supabaseAdmin()
+  const db = supabaseAdmin()
+  const { data, error } = await db
     .from('conversations')
     .select('id')
     .eq('user_id', args.automation.user_id)
     .eq('contact_id', args.contactId)
     .maybeSingle()
   if (error) throw new Error(`conversation lookup failed: ${error.message}`)
-  if (!data?.id) throw new Error('no conversation for contact')
-  return data.id as string
+  if (data?.id) return data.id as string
+
+  // No conversation exists yet — auto-create one so order-placed and
+  // other outbound automations can send to customers who have never
+  // initiated a WhatsApp conversation (new order notifications, etc.)
+  const { data: created, error: createErr } = await db
+    .from('conversations')
+    .insert({
+      user_id: args.automation.user_id,
+      contact_id: args.contactId,
+      status: 'open',
+      channel: 'whatsapp',
+    })
+    .select('id')
+    .single()
+  if (createErr || !created?.id) {
+    throw new Error(`failed to create conversation: ${createErr?.message ?? 'unknown'}`)
+  }
+  return created.id as string
 }
+
 
 function triggerMatches(automation: Automation, ctx: AutomationContext | undefined): boolean {
   if (automation.trigger_type !== 'keyword_match') return true

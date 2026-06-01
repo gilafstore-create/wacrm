@@ -18,6 +18,7 @@ import {
   logSecurityEvent,
   getClientIP,
 } from '@/lib/integration/middleware'
+import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import crypto from 'crypto'
 
 export async function POST(request: NextRequest) {
@@ -354,17 +355,24 @@ async function removeTag(admin: any, contact: any, tagName: string) {
 }
 
 async function triggerAutomation(admin: any, contact: any, trigger: string, data: any) {
-  const { data: automations } = await admin
-    .from('automations')
-    .select('id')
-    .eq('user_id', contact.user_id ?? '')
-    .eq('trigger', trigger)
-    .eq('is_active', true)
-  for (const auto of automations ?? []) {
-    await admin.from('automation_pending_executions').insert({
-      automation_id: auto.id,
-      contact_id: contact.id,
-      trigger_data: data,
+  // FIX: was querying .eq('trigger', trigger) — wrong column name.
+  // The automations table uses 'trigger_type'. This caused zero automations
+  // to ever be found, silently skipping all WhatsApp order notifications.
+  //
+  // FIX: was inserting into automation_pending_executions directly — that
+  // table is only for wait-step resumptions, not for initial execution.
+  // runAutomationsForTrigger() is the correct execution path: it fetches
+  // matching automations by trigger_type, evaluates conditions, and runs
+  // each step (including send_template → Meta API → customer message).
+  if (!contact?.id || !contact?.user_id) return
+  try {
+    await runAutomationsForTrigger({
+      userId: contact.user_id,
+      triggerType: trigger as any,
+      contactId: contact.id,
+      context: { vars: data },
     })
+  } catch (err) {
+    console.error('[integration/webhook] triggerAutomation failed:', trigger, err)
   }
 }
