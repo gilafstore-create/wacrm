@@ -31,6 +31,7 @@ export interface IntegrationRow {
   website_api_key: string
   webhook_url: string | null
   webhook_secret: string | null
+  last_sync_at: string | null
   total_synced_contacts: number | null
   total_synced_orders: number | null
   total_webhooks_sent: number | null
@@ -119,9 +120,13 @@ export async function runIntegrationSync(
     const apiKey = intg.website_api_key
 
     if (entityType === 'contacts' || entityType === 'all') {
-      const res = await fetch(`${base}/api/crm/customers?limit=100`, {
+      // Use last_sync_at for incremental sync — prevents historical data loss
+      const sinceParam = intg.last_sync_at
+        ? `&since=${encodeURIComponent(intg.last_sync_at)}`
+        : ''
+      const res = await fetch(`${base}/api/crm/customers?limit=500${sinceParam}`, {
         headers: { 'X-GilafStore-Key': apiKey, 'Accept': 'application/json' },
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(30_000),
       }).catch(() => null)
 
       if (res?.ok) {
@@ -153,9 +158,13 @@ export async function runIntegrationSync(
 
     // ── Orders sync ──────────────────────────────────────────────────────────
     if ((entityType === 'orders' || entityType === 'all') && !syncError) {
-      const ordersRes = await fetch(`${base}/api/crm/orders?limit=100`, {
+      // Use last_sync_at for incremental sync — prevents historical data loss
+      const ordersSinceParam = intg.last_sync_at
+        ? `&since=${encodeURIComponent(intg.last_sync_at)}`
+        : ''
+      const ordersRes = await fetch(`${base}/api/crm/orders?limit=500${ordersSinceParam}`, {
         headers: { 'X-GilafStore-Key': apiKey, 'Accept': 'application/json' },
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(30_000),
       }).catch(() => null)
 
       if (ordersRes?.ok) {
