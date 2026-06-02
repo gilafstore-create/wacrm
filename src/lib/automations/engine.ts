@@ -334,7 +334,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
               if (bNum) return 1
               return a.localeCompare(b)
             })
-            .map((k) => String(cfg.variables![k]))
+            .map((k) => interpolate(String(cfg.variables![k]), args))
         : []
       const { whatsapp_message_id } = await engineSendTemplate({
         userId: args.automation.user_id,
@@ -558,12 +558,34 @@ function waitMs(cfg: WaitStepConfig): number {
 }
 
 function interpolate(s: string, args: ExecuteArgs): string {
-  return s.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, key) => {
+  // First pass: double braces {{var}} or {{namespace.var}}
+  let result = s.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, key) => {
     const [ns, prop] = String(key).split('.')
-    if (ns === 'message' && prop === 'text') return String(args.context.message_text ?? '')
-    if (ns === 'vars' && prop) return String(args.context.vars?.[prop] ?? '')
+    
+    // Support {{message.text}}
+    if (ns === 'message' && prop === 'text') {
+      return String(args.context.message_text ?? '')
+    }
+    
+    // Support {{vars.property}}
+    if (ns === 'vars' && prop) {
+      return String(args.context.vars?.[prop] ?? '')
+    }
+    
+    // Support {{property}} without namespace (fallback to vars)
+    if (!prop && args.context.vars?.[ns]) {
+      return String(args.context.vars[ns])
+    }
+    
     return ''
   })
+  
+  // Second pass: single braces {var} for backward compatibility
+  result = result.replace(/\{(\w+)\}/g, (_, key) => {
+    return String(args.context.vars?.[key] ?? `{${key}}`)
+  })
+  
+  return result
 }
 
 async function appendResults(
