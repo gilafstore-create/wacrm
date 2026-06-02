@@ -818,6 +818,21 @@ export default function IntegrationsPage() {
     setView("detail");
   };
 
+  const deleteIntegration = async (intg: Integration) => {
+    if (!confirm(`Delete integration "${intg.website_name}"? This cannot be undone.`)) return;
+    const r = await fetch(`/api/integrations?id=${encodeURIComponent(intg.id)}`, { method: "DELETE" });
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      alert(String(data.error ?? "Delete failed"));
+      return;
+    }
+    if (selected?.id === intg.id) {
+      setSelected(null);
+      setView("list");
+    }
+    await load();
+  };
+
   const refreshDetail = async () => {
     await load();
     if (selected) {
@@ -923,8 +938,9 @@ export default function IntegrationsPage() {
                 {integrations.map(intg => {
                   const s = STATUS_CONFIG[intg.status] ?? STATUS_CONFIG.pending;
                   return (
-                    <button key={intg.id} onClick={() => openDetail(intg)}
-                      className="w-full rounded-xl border border-slate-800 bg-slate-900/60 p-5 text-left transition-colors hover:border-slate-700 hover:bg-slate-900">
+                    <div key={intg.id} onClick={() => openDetail(intg)} role="button" tabIndex={0}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openDetail(intg); }}
+                      className="w-full cursor-pointer rounded-xl border border-slate-800 bg-slate-900/60 p-5 text-left transition-colors hover:border-slate-700 hover:bg-slate-900">
                       <div className="flex items-start gap-4">
                         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-violet-600/20">
                           <Globe className="h-5 w-5 text-violet-400" />
@@ -959,9 +975,17 @@ export default function IntegrationsPage() {
                             </div>
                           </div>
                         </div>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); deleteIntegration(intg); }}
+                          className="self-center rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-red-400 transition-colors hover:bg-red-500/20"
+                          title="Delete integration"
+                          type="button"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
                         <ChevronRight className="h-4 w-4 shrink-0 text-slate-600 self-center" />
                       </div>
-                    </button>
+                    </div>
                   );
                 })}
               </div>
