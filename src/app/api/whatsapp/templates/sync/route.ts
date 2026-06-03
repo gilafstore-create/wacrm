@@ -124,6 +124,7 @@ function extractSampleValues(
 
 export async function POST() {
   try {
+    console.log('[Template Sync] Starting sync...')
     const supabase = await createClient()
 
     const {
@@ -132,8 +133,11 @@ export async function POST() {
     } = await supabase.auth.getUser()
 
     if (authError || !user) {
+      console.error('[Template Sync] Auth failed:', authError)
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    console.log('[Template Sync] User authenticated:', user.id)
 
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
@@ -142,6 +146,7 @@ export async function POST() {
       .single()
 
     if (configError || !config) {
+      console.error('[Template Sync] Config error:', configError)
       return NextResponse.json(
         {
           error:
@@ -150,6 +155,8 @@ export async function POST() {
         { status: 400 },
       )
     }
+
+    console.log('[Template Sync] Config loaded:', { waba_id: config.waba_id, phone_number_id: config.phone_number_id })
 
     if (!config.waba_id) {
       return NextResponse.json(
@@ -162,6 +169,7 @@ export async function POST() {
     }
 
     const accessToken = await decryptAsync(config.access_token)
+    console.log('[Template Sync] Access token decrypted, length:', accessToken?.length)
 
     const metaTemplates: MetaTemplate[] = []
     let nextUrl:
@@ -170,16 +178,21 @@ export async function POST() {
     const PAGE_CAP = 20
     let pageCount = 0
 
+    console.log('[Template Sync] Fetching from Meta API:', nextUrl)
+
     while (nextUrl && pageCount < PAGE_CAP) {
       pageCount++
       const metaRes: Response = await fetch(nextUrl, {
         headers: { Authorization: `Bearer ${accessToken}` },
       })
 
+      console.log('[Template Sync] Meta API response:', { page: pageCount, status: metaRes.status })
+
       if (!metaRes.ok) {
         let metaErr = `Meta API error: ${metaRes.status}`
         try {
           const body = await metaRes.json()
+          console.error('[Template Sync] Meta API error body:', body)
           if (body?.error?.message) metaErr = body.error.message
         } catch {
           // response wasn't JSON — keep the fallback
@@ -191,15 +204,22 @@ export async function POST() {
         data?: MetaTemplate[]
         paging?: { next?: string }
       } = await metaRes.json()
-      if (metaBody.data) metaTemplates.push(...metaBody.data)
+      if (metaBody.data) {
+        console.log('[Template Sync] Fetched templates:', metaBody.data.length)
+        metaTemplates.push(...metaBody.data)
+      }
       nextUrl = metaBody.paging?.next ?? null
     }
+
+    console.log('[Template Sync] Total templates fetched from Meta:', metaTemplates.length)
 
     let inserted = 0
     let updated = 0
     const errors: { name: string; language: string; message: string }[] = []
 
     for (const t of metaTemplates) {
+      console.log('[Template Sync] Processing:', t.name, t.language, t.status)
+      
       const body = (t.components ?? []).find((c) => c.type === 'BODY')
       const header = (t.components ?? []).find((c) => c.type === 'HEADER')
       const footer = (t.components ?? []).find((c) => c.type === 'FOOTER')
@@ -244,6 +264,7 @@ export async function POST() {
         .maybeSingle()
 
       if (lookupErr) {
+        console.error('[Template Sync] Lookup error:', t.name, lookupErr.message)
         errors.push({
           name: t.name,
           language: t.language,
@@ -253,11 +274,13 @@ export async function POST() {
       }
 
       if (existing?.id) {
+        console.log('[Template Sync] Updating existing:', t.name)
         const { error: updErr } = await supabase
           .from('message_templates')
           .update(row)
           .eq('id', existing.id)
         if (updErr) {
+          console.error('[Template Sync] Update error:', t.name, updErr.message)
           errors.push({
             name: t.name,
             language: t.language,
@@ -265,12 +288,15 @@ export async function POST() {
           })
         } else {
           updated++
+          console.log('[Template Sync] Updated:', t.name)
         }
       } else {
+        console.log('[Template Sync] Inserting new:', t.name)
         const { error: insErr } = await supabase
           .from('message_templates')
           .insert(row)
         if (insErr) {
+          console.error('[Template Sync] Insert error:', t.name, insErr.message, insErr)
           errors.push({
             name: t.name,
             language: t.language,
@@ -278,9 +304,12 @@ export async function POST() {
           })
         } else {
           inserted++
+          console.log('[Template Sync] Inserted:', t.name)
         }
       }
     }
+
+    console.log('[Template Sync] Sync complete:', { total: metaTemplates.length, inserted, updated, errors: errors.length })
 
     return NextResponse.json({
       success: errors.length === 0,
@@ -291,7 +320,7 @@ export async function POST() {
       truncated: pageCount >= PAGE_CAP && nextUrl !== null,
     })
   } catch (error) {
-    console.error('Error syncing WhatsApp templates:', error)
+    console.error('[Template Sync] Fatal error:', error)
     return NextResponse.json(
       {
         error:
