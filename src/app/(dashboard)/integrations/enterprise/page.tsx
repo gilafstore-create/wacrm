@@ -1147,6 +1147,7 @@ function IntegrationsList({ onSelect }: { onSelect: (intg: Integration) => void 
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1157,6 +1158,24 @@ function IntegrationsList({ onSelect }: { onSelect: (intg: Integration) => void 
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const deleteIntegration = async (e: React.MouseEvent, intg: Integration) => {
+    e.stopPropagation();
+    if (!confirm(`Delete "${intg.website_name}"?\n\nThis will permanently remove this integration, all API keys, and webhook history. This action cannot be undone.`)) return;
+    setDeleting(intg.id);
+    try {
+      const r = await fetch(`/api/integrations?id=${intg.id}`, { method: "DELETE" });
+      const d = await r.json();
+      if (d.success) {
+        setIntegrations(prev => prev.filter(i => i.id !== intg.id));
+      } else {
+        alert("Failed to delete: " + (d.error || "Unknown error"));
+      }
+    } catch {
+      alert("Network error while deleting integration.");
+    }
+    setDeleting(null);
+  };
 
   const filtered = integrations.filter(i =>
     i.website_name.toLowerCase().includes(search.toLowerCase()) ||
@@ -1194,11 +1213,13 @@ function IntegrationsList({ onSelect }: { onSelect: (intg: Integration) => void 
           {filtered.map(intg => {
             const healthColor = intg.health_score >= 80 ? "text-emerald-400" : intg.health_score >= 60 ? "text-amber-400" : "text-red-400";
             const healthBg = intg.health_score >= 80 ? "from-emerald-500/5 to-transparent" : intg.health_score >= 60 ? "from-amber-500/5 to-transparent" : "from-red-500/5 to-transparent";
+            const isDeleting = deleting === intg.id;
             return (
               <button
                 key={intg.id}
                 onClick={() => onSelect(intg)}
-                className={`group rounded-2xl border border-white/5 bg-gradient-to-b ${healthBg} bg-slate-900/60 p-5 text-left backdrop-blur-sm hover:border-violet-500/30 hover:bg-violet-500/5 transition-all duration-200 shadow-xl`}
+                disabled={isDeleting}
+                className={`group relative rounded-2xl border border-white/5 bg-gradient-to-b ${healthBg} bg-slate-900/60 p-5 text-left backdrop-blur-sm hover:border-violet-500/30 hover:bg-violet-500/5 transition-all duration-200 shadow-xl ${isDeleting ? "opacity-50 pointer-events-none" : ""}`}
               >
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex items-center gap-3">
@@ -1212,6 +1233,14 @@ function IntegrationsList({ onSelect }: { onSelect: (intg: Integration) => void 
                   </div>
                   <div className="flex items-center gap-1.5">
                     <StatusPill status={intg.status} />
+                    <button
+                      onClick={(e) => deleteIntegration(e, intg)}
+                      disabled={isDeleting}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/25 hover:border-red-500/50 hover:text-red-300 transition-all duration-150 disabled:opacity-50"
+                      title={`Delete ${intg.website_name}`}
+                    >
+                      {isDeleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                    </button>
                     <ChevronRight className="h-4 w-4 text-slate-600 group-hover:text-violet-400 group-hover:translate-x-0.5 transition-all" />
                   </div>
                 </div>
