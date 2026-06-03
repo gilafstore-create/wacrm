@@ -127,6 +127,8 @@ export default function FlowsPage() {
     if (!newName.trim()) return;
     setCreating(true);
     try {
+      console.log('[handleCreate] Creating flow:', newName.trim());
+      
       const res = await fetch("/api/flows", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -136,13 +138,25 @@ export default function FlowsPage() {
           trigger_config: { keywords: [] },
         }),
       });
-      if (!res.ok) throw new Error(`Create failed: ${res.status}`);
+      
+      console.log('[handleCreate] Response status:', res.status);
+      
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        console.error('[handleCreate] Create failed:', res.status, errorData);
+        throw new Error(`Create failed: ${res.status}`);
+      }
+      
       const json = (await res.json()) as { flow: FlowRow };
+      console.log('[handleCreate] Flow created:', json.flow.id);
+      
       setCreateOpen(false);
       setNewName("");
+      
+      console.log('[handleCreate] Redirecting to:', `/flows/${json.flow.id}`);
       router.push(`/flows/${json.flow.id}`);
     } catch (err) {
-      console.error(err);
+      console.error('[handleCreate] Error:', err);
       toast.error("Couldn't create flow.");
     } finally {
       setCreating(false);

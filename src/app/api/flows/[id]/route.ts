@@ -52,9 +52,13 @@ export async function GET(
   context: { params: Promise<{ id: string }> },
 ) {
   const { id } = await context.params
+  console.log('[GET /api/flows/:id] Fetching flow:', id)
+  
   const guard = await requireOwnership(id)
+  console.log('[GET /api/flows/:id] Ownership check:', { ok: guard.ok, status: guard.ok ? 'authorized' : guard.status })
+  
   if (!guard.ok) return NextResponse.json(guard.body, { status: guard.status })
-  const { supabase } = guard
+  const { supabase, userId } = guard
 
   const [{ data: flow }, { data: nodes }] = await Promise.all([
     supabase.from('flows').select('*').eq('id', id).maybeSingle(),
@@ -64,7 +68,15 @@ export async function GET(
       .eq('flow_id', id)
       .order('created_at', { ascending: true }),
   ])
+  
+  console.log('[GET /api/flows/:id] Query result:', { 
+    flowFound: !!flow, 
+    nodeCount: nodes?.length ?? 0,
+    userId 
+  })
+  
   if (!flow) {
+    console.error('[GET /api/flows/:id] Flow not found:', id)
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
   return NextResponse.json({ flow, nodes: nodes ?? [] })

@@ -111,7 +111,7 @@ export async function POST(request: NextRequest) {
   
   // +10 CRM endpoint reachable
   const crmEndpointCandidates = [
-    `${base}/api/crm/customers`,
+    `${base}/api/integration/sync-customer`,
     `${base}/api/customers`,
     `${base}/wp-json/wc/v3/customers`,
     `${base}/admin/api/2024-01/customers.json`,
