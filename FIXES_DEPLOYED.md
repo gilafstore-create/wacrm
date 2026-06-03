@@ -121,22 +121,24 @@ console.log('[handleCreate] Redirecting to:', url)
 | #1 | Contacts 404 | ✅ Resolved | User needs `/dashboard/contacts` |
 | #2 | Delete button | ✅ Found | Exists in Settings tab |
 | #3 | HTTP 403 | ✅ **FIXED** | Endpoint corrected |
-| #4 | Template sync | ⚠️ Investigate | Check Meta API |
+| #4 | Template sync | ✅ **DEBUG ADDED** | Check logs |
 | #5 | Flow creation | ✅ **DEBUG ADDED** | Check logs |
 
 ---
 
 ## 🚀 **DEPLOYMENT DETAILS**
 
-**Git Commit:** `d4bae1e`  
+**Latest Commit:** `9cbe12c`  
 **Branch:** `main`  
 **Remote:** `https://github.com/gilafstore-create/wacrm.git`
 
-**Files Changed:** 6 files, 454 insertions(+), 6 deletions(-)
+**Total Files Changed:** 7 files, 485 insertions(+), 8 deletions(-)
 
 **Commits:**
 1. `135bdef` - WACRM 5 issues root cause analysis (docs)
 2. `d4bae1e` - Fix Issues #3 and #5 (code fixes)
+3. `8cf05f9` - Deployment summary
+4. `9cbe12c` - Fix Issue #4 template sync (debug logging)
 
 ---
 
@@ -149,6 +151,14 @@ console.log('[handleCreate] Redirecting to:', url)
 - [ ] Verify no 403 errors in Network tab
 - [ ] Verify customers sync successfully
 - [ ] Check sync count increases
+
+### **Issue #4: Template Sync**
+- [ ] Open browser DevTools > Console
+- [ ] Go to WhatsApp Templates page
+- [ ] Click "Sync Templates" button
+- [ ] **Check console logs** for `[Template Sync]` messages
+- [ ] Check server logs for detailed sync process
+- [ ] Verify templates appear in the list
 
 ### **Issue #5: Flow Creation**
 - [ ] Open browser DevTools > Console
@@ -185,11 +195,10 @@ console.log('[handleCreate] Redirecting to:', url)
 3. 📝 Share log output for Issue #5 analysis
 
 ### **Short Term (This Week):**
-4. ⚠️ Investigate Issue #4 - Template sync
-   - Check Meta Business Manager
-   - Verify template approval status
-   - Test Meta API connection
-   - Check access token validity
+4. ✅ Test Issue #4 - Template sync with logs
+   - Run sync and check console logs
+   - Identify exact failure point
+   - Fix based on log output
 
 5. 🎨 Improve Issue #2 - Delete button UX
    - Add delete button to integration card
@@ -212,7 +221,38 @@ All investigation and fixes documented in:
 
 ## 🔍 **DEBUGGING GUIDE**
 
-### **How to Debug Issue #5:**
+### **How to Debug Issue #4 (Template Sync):**
+
+1. **Open Browser Console:**
+   - Press F12 or Ctrl+Shift+I
+   - Go to Console tab
+   - Clear console
+
+2. **Run Template Sync:**
+   - Go to WhatsApp Templates page
+   - Click "Sync Templates" button
+   - Watch console for `[Template Sync]` messages
+
+3. **Analyze Logs:**
+   - **Auth Check:** `[Template Sync] User authenticated: {userId}`
+   - **Config Check:** `[Template Sync] Config loaded: {waba_id, phone_number_id}`
+   - **Meta API:** `[Template Sync] Meta API response: {page, status}`
+   - **Templates Fetched:** `[Template Sync] Total templates fetched from Meta: X`
+   - **Processing:** `[Template Sync] Processing: {name} {language} {status}`
+   - **Database Ops:** `[Template Sync] Inserted/Updated: {name}`
+
+4. **Common Issues:**
+   - **401 Unauthorized:** WhatsApp not connected
+   - **502 Meta API Error:** Access token expired or invalid
+   - **Insert/Update Error:** Database constraint violation or RLS policy
+   - **0 Templates Fetched:** WABA ID incorrect or no templates in Meta
+
+5. **Check Server Logs:**
+   - If deployed on Render/Vercel, check deployment logs
+   - Look for `[Template Sync]` messages
+   - Full error details will be in server logs
+
+### **How to Debug Issue #5 (Flow Creation):**
 
 1. **Open Browser Console:**
    - Press F12 or Ctrl+Shift+I
