@@ -13,6 +13,7 @@
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
+import { writeAudit } from './audit'
 
 export function syncAdminClient(): SupabaseClient {
   return createClient(
@@ -150,7 +151,22 @@ export async function runIntegrationSync(
           }
         }
       } else if (res) {
+        // Surface the website's own error message so the real cause is visible
+        // in the dashboard (e.g. IP whitelist / invalid key) without server logs.
+        let detail = ''
+        try {
+          const errBody = await res.text()
+          if (errBody) {
+            try {
+              const parsed = JSON.parse(errBody) as Record<string, unknown>
+              detail = String(parsed.error ?? parsed.message ?? errBody)
+            } catch {
+              detail = errBody
+            }
+          }
+        } catch { /* ignore */ }
         syncError = `Website returned HTTP ${res.status} from /api/crm/customers`
+          + (detail ? ` — ${detail.slice(0, 200)}` : '')
       } else {
         syncError = 'Website unreachable (request failed or timed out)'
       }
@@ -230,6 +246,23 @@ export async function runIntegrationSync(
     total_synced_contacts: (intg.total_synced_contacts ?? 0) + synced,
   }).eq('id', intg.id)
 
+  // Audit: record the sync outcome (Audit Center -> Sync tab)
+  await writeAudit(admin, {
+    userId:         intg.user_id,
+    actionType:     syncError ? 'sync_failed' : 'sync_completed',
+    actionCategory: 'sync',
+    targetType:     'integration',
+    targetId:       intg.id,
+    targetName:     intg.website_url,
+    description:    syncError
+      ? `${opts.syncType} sync failed: ${syncError}`
+      : `${opts.syncType} sync completed — ${synced} synced, ${failed} failed (${entityType})`,
+    success:        !syncError,
+    errorMessage:   syncError,
+    endpoint:       `${intg.website_url}/api/crm/customers`,
+    tags:           [opts.syncType, entityType],
+  })
+
   // Dispatch webhook to the website
   if (intg.webhook_url) {
     const webhookPayload = {
@@ -268,6 +301,23 @@ export async function runIntegrationSync(
         error_message: webhookResult.error,
       }).eq('id', delivery.id)
     }
+
+    // Audit: record the webhook delivery (Audit Center -> Webhooks tab)
+    const whEvent = syncError ? 'sync.failed' : 'sync.completed'
+    await writeAudit(admin, {
+      userId:         intg.user_id,
+      actionType:     webhookResult.ok ? 'webhook_delivered' : 'webhook_failed',
+      actionCategory: 'webhooks',
+      targetType:     'integration',
+      targetId:       intg.id,
+      targetName:     intg.webhook_url,
+      description:    `Webhook ${whEvent} -> HTTP ${webhookResult.status} (${webhookResult.latency}ms)`,
+      success:        webhookResult.ok,
+      errorMessage:   webhookResult.error,
+      endpoint:       intg.webhook_url,
+      method:         'POST',
+      tags:           [whEvent],
+    })
 
     const counterUpdate: Record<string, unknown> = {
       total_webhooks_sent: (intg.total_webhooks_sent ?? 0) + 1,

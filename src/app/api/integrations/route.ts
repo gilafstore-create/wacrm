@@ -8,6 +8,7 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
+import { writeAudit } from '@/lib/integrations/audit'
 
 function adminClient() {
   return createClient(
@@ -114,6 +115,18 @@ export async function POST(request: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
+  await writeAudit(admin, {
+    userId:         user.id,
+    actionType:     'integration_created',
+    actionCategory: 'integrations',
+    targetType:     'integration',
+    targetId:       data.id,
+    targetName:     website_name.trim(),
+    description:    `Integration created for ${website_url}`,
+    endpoint:       '/api/integrations',
+    method:         'POST',
+  })
+
   // Return raw token once — never again
   return NextResponse.json({
     success: true,
@@ -155,6 +168,18 @@ export async function PUT(request: NextRequest) {
     .eq('user_id', user.id)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  await writeAudit(admin, {
+    userId:         user.id,
+    actionType:     'integration_updated',
+    actionCategory: 'integrations',
+    targetType:     'integration',
+    targetId:       id,
+    description:    `Integration settings updated: ${Object.keys(safe).filter(k => k !== 'updated_at').join(', ')}`,
+    endpoint:       '/api/integrations',
+    method:         'PUT',
+  })
+
   return NextResponse.json({ success: true })
 }
 
@@ -175,5 +200,17 @@ export async function DELETE(request: NextRequest) {
     .eq('user_id', user.id)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  await writeAudit(admin, {
+    userId:         user.id,
+    actionType:     'integration_deleted',
+    actionCategory: 'integrations',
+    targetType:     'integration',
+    targetId:       id,
+    description:    'Integration removed',
+    endpoint:       '/api/integrations',
+    method:         'DELETE',
+  })
+
   return NextResponse.json({ success: true })
 }

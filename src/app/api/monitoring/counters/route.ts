@@ -50,13 +50,14 @@ export async function GET(request: NextRequest) {
   const totalContacts = integrations?.reduce((sum, i) => sum + (i.total_synced_contacts || 0), 0) || 0
   const totalOrders = integrations?.reduce((sum, i) => sum + (i.total_synced_orders || 0), 0) || 0
 
-  // Failed syncs today — scoped to user's integrations
+  // Failed syncs today — scoped to user's integrations.
+  // NOTE: website_sync_log timestamps its rows with started_at, not created_at.
   const { count: failedSyncs } = await admin
     .from('website_sync_log')
     .select('*', { count: 'exact', head: true })
     .eq('user_id', user.id)
     .eq('status', 'failed')
-    .gte('created_at', today.toISOString())
+    .gte('started_at', today.toISOString())
 
   // Queue size: incoming webhook logs not yet processed (status = 'received')
   const { count: queueSize } = await admin

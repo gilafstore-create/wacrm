@@ -8,6 +8,7 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
+import { writeAudit } from '@/lib/integrations/audit'
 
 function adminClient() {
   return createClient(
@@ -66,6 +67,7 @@ export async function POST(request: NextRequest) {
   let healthEndpoint = false   // dedicated /health route found
   let webhookFound   = false   // webhook endpoint found (any 2xx-4xx)
   let discoveredWebhookUrl: string | null = null  // the live webhook receiver URL on the store
+  let consecutiveFailures = 0  // carried out of the DB read for the status calc
   
   // Platform-agnostic health score breakdown
   const healthBreakdown = {
@@ -241,7 +243,8 @@ export async function POST(request: NextRequest) {
         healthBreakdown.data_health.score += 5
         healthBreakdown.data_health.checks.orders_syncing = true
       }
-      if ((intg.consecutive_sync_failures ?? 0) === 0) {
+      consecutiveFailures = intg.consecutive_sync_failures ?? 0
+      if (consecutiveFailures === 0) {
         healthBreakdown.data_health.score += 5
         healthBreakdown.data_health.checks.no_sync_failures = true
       }
@@ -287,6 +290,13 @@ export async function POST(request: NextRequest) {
   let overallStatus: 'active' | 'warning' | 'error' = 'error'
   if (healthScore >= 60) overallStatus = 'active'
   else if (siteReachable) overallStatus = 'warning'  // never 'error' when reachable — would break API key auth
+
+  // Issue #9: status must reflect sync reality, not just the health score.
+  // An integration whose syncs keep failing is not truly "active" — surface
+  // it as a warning so the badge matches the failing Sync/Health panels.
+  if (overallStatus === 'active' && consecutiveFailures >= 3) {
+    overallStatus = 'warning'
+  }
 
   // ── 6. Generate human-readable recommendation ─────────────────────────────────
   let recommendation: string
@@ -335,6 +345,20 @@ export async function POST(request: NextRequest) {
         last_error_at: now,
       }),
     }).eq('id', id).eq('user_id', user.id)
+
+    await writeAudit(admin, {
+      userId:         user.id,
+      actionType:     'health_check_run',
+      actionCategory: 'integrations',
+      targetType:     'integration',
+      targetId:       id,
+      targetName:     base,
+      description:    `Health check: score ${healthScore}/100, status ${overallStatus}, ${endpoints.length} endpoint(s) found`,
+      success:        siteReachable,
+      endpoint:       '/api/integrations/test',
+      method:         'POST',
+      tags:           [platform],
+    })
 
     // ── Send a test webhook if the integration has a webhook_url ──────────
     if (webhookFound && siteReachable) {
