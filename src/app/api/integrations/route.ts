@@ -86,6 +86,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'website_name and website_url are required' }, { status: 400 })
   }
 
+  // Guard: webhook_url is where WACRM DELIVERS events TO the store. It must never
+  // be WACRM's own inbound endpoint, or outgoing webhooks 401 against ourselves.
+  const cleanWebhookUrl =
+    webhook_url && !String(webhook_url).includes('/api/integration/webhook')
+      ? String(webhook_url).trim()
+      : null
+
   // Auto-generate secrets
   const websiteSecret  = 'whs_' + crypto.randomBytes(24).toString('hex')
   const webhookSecret  = 'wbk_' + crypto.randomBytes(24).toString('hex')
@@ -99,7 +106,7 @@ export async function POST(request: NextRequest) {
     platform:         platform ?? 'custom',
     website_api_key:  website_api_key ?? ('gsk_' + crypto.randomBytes(20).toString('hex')),
     website_secret:   websiteSecret,
-    webhook_url:      webhook_url ?? null,
+    webhook_url:      cleanWebhookUrl,
     webhook_secret:   webhookSecret,
     connection_token: connectionToken,
     status:           'pending',
@@ -134,6 +141,10 @@ export async function PUT(request: NextRequest) {
   delete safe.webhook_secret
   delete safe.connection_token
   delete safe.user_id
+  // Reject WACRM's own inbound endpoint as a delivery target (would 401 on itself)
+  if (safe.webhook_url && String(safe.webhook_url).includes('/api/integration/webhook')) {
+    delete safe.webhook_url
+  }
   safe.updated_at = new Date().toISOString()
 
   const admin = adminClient()

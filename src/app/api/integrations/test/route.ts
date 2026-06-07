@@ -65,6 +65,7 @@ export async function POST(request: NextRequest) {
   let siteReachable  = false   // base URL responds at all
   let healthEndpoint = false   // dedicated /health route found
   let webhookFound   = false   // webhook endpoint found (any 2xx-4xx)
+  let discoveredWebhookUrl: string | null = null  // the live webhook receiver URL on the store
   
   // Platform-agnostic health score breakdown
   const healthBreakdown = {
@@ -166,6 +167,7 @@ export async function POST(request: NextRequest) {
     }, 5000)
     if (r.status >= 200 && r.status < 500) {
       webhookFound = true
+      discoveredWebhookUrl = url
       healthBreakdown.integration.score += 10
       healthBreakdown.integration.checks.webhook_endpoint = { url, status: r.status }
       endpoints.push(url)
@@ -306,6 +308,14 @@ export async function POST(request: NextRequest) {
   if (id) {
     const admin = adminClient()
     const now = new Date().toISOString()
+    // Self-heal webhook_url: persist the discovered store receiver, but NEVER
+    // store WACRM's own inbound endpoint (that would make outgoing webhooks 401
+    // against ourselves). Only set when we found a real store-side receiver.
+    const safeWebhookUrl =
+      discoveredWebhookUrl && !discoveredWebhookUrl.includes('/api/integration/webhook')
+        ? discoveredWebhookUrl
+        : null
+
     await admin.from('website_integrations').update({
       status:               overallStatus,
       health_score:         healthScore,
@@ -314,6 +324,7 @@ export async function POST(request: NextRequest) {
       last_discovery_at:    now,
       platform,
       updated_at:           now,
+      ...(safeWebhookUrl ? { webhook_url: safeWebhookUrl } : {}),
       ...(siteReachable ? {
         last_heartbeat_at:    now,
         heartbeat_latency_ms: baseCheck.latency,

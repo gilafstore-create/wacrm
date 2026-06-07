@@ -1,15 +1,21 @@
 -- Migration 027: Fix calculate_security_score
--- Root cause: v_recent_rotations only counted last_rotated_at > 90 days ago,
--- ignoring newly-created keys that have never been rotated (last_rotated_at IS NULL).
--- Fix: treat keys created within the 90-day window as compliant so a fresh
--- integration doesn't start at 0/10 for secret rotation.
+-- Fix 1: v_recent_rotations only counted last_rotated_at > 90 days ago,
+--   ignoring newly-created keys that have never been rotated (last_rotated_at IS NULL).
+--   Treat keys created within the 90-day window as compliant.
+-- Fix 2: output columns were named api_key_score / webhook_score, but the API
+--   route (/api/security/score) and the dashboard read api_key_security_score /
+--   webhook_validation_score by name -> those two bars rendered blank. Renamed
+--   the output columns to match the consumer contract.
+
+-- Drop existing function so we can change its return column names
+DROP FUNCTION IF EXISTS public.calculate_security_score();
 
 CREATE OR REPLACE FUNCTION public.calculate_security_score()
 RETURNS TABLE (
   overall_score INTEGER,
   ssl_score INTEGER,
-  api_key_score INTEGER,
-  webhook_score INTEGER,
+  api_key_security_score INTEGER,
+  webhook_validation_score INTEGER,
   secret_rotation_score INTEGER,
   failed_requests_score INTEGER,
   suspicious_ips_score INTEGER,
