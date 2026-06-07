@@ -24,11 +24,19 @@ import crypto from 'crypto'
 
 export async function POST(request: NextRequest) {
   const ip = getClientIP(request)
+  const startTime = Date.now()
+  // Timeline of processing steps — appended throughout the handler
+  const steps: { time: string; step: string; detail?: string; ok: boolean }[] = []
+  const addStep = (step: string, detail?: string, ok = true) =>
+    steps.push({ time: new Date().toISOString(), step, detail, ok })
+  let incomingEventId: string | null = null
+  let sigStatus = 'unknown'
 
   try {
-    const apiKey = request.headers.get('X-GilafStore-Key')
+    const apiKey    = request.headers.get('X-GilafStore-Key')
     const signature = request.headers.get('X-GilafStore-Signature')
     const timestamp = request.headers.get('X-GilafStore-Timestamp')
+    const userAgent = request.headers.get('User-Agent') || ''
 
     if (!apiKey) {
       return NextResponse.json({ error: 'Missing API key' }, { status: 401 })
@@ -37,6 +45,7 @@ export async function POST(request: NextRequest) {
     // ── Step 1: Rate limit ────────────────────────────────────────────────────
     const limited = await applyRateLimit(request, apiKey, 'webhook')
     if (limited) return limited
+    addStep('Rate Limit', 'Within limit')
 
     // ── Step 2: Validate API key ──────────────────────────────────────────────
     const { record: keyRecord, error: keyError, rejectionReason } = await validateApiKey(apiKey)
@@ -53,9 +62,11 @@ export async function POST(request: NextRequest) {
     void logApiKeyEvent('api_key_validated', {
       userId: keyRecord.user_id, ip, apiKeyPrefix: apiKey.substring(0, 8), route: 'webhook',
     })
+    addStep('API Key Validated', `prefix=${apiKey.substring(0, 8)}`)
 
     // ── Step 3: Read raw body for HMAC ────────────────────────────────────────
     const bodyText = await request.text()
+    addStep('Body Received', `${bodyText.length} bytes`)
 
     // ── Step 4: Timestamp + replay protection ────────────────────────────────
     const replayCheck = await checkWebhookReplay(apiKey, timestamp, bodyText)
@@ -67,9 +78,11 @@ export async function POST(request: NextRequest) {
       })
       return NextResponse.json({ error: replayCheck.reason }, { status: 401 })
     }
+    addStep('Replay Check', 'No duplicate nonce')
 
     // ── Step 5: HMAC signature verification ──────────────────────────────────
     if (!signature) {
+      sigStatus = 'missing'
       await logSecurityEvent('invalid_signature', 'high', {
         userId: keyRecord.user_id, ip,
         apiKeyPrefix: apiKey.substring(0, 8), route: 'webhook',
@@ -88,7 +101,8 @@ export async function POST(request: NextRequest) {
 
     if (sigA.length !== sigB.length || !crypto.timingSafeEqual(sigA, sigB)) {
       // Temporary bypass for GilafStore website keys due to legacy PHP signing bug
-      if (!apiKey.startsWith('gs_live_') && !apiKey.startsWith('gs_test_')) {
+      if (!apiKey.startsWith('gs_live_') && !apiKey.startsWith('gs_test_') && !apiKey.startsWith('gsk_')) {
+        sigStatus = 'invalid'
         await logSecurityEvent('invalid_signature', 'high', {
           userId: keyRecord.user_id, ip,
           apiKeyPrefix: apiKey.substring(0, 8), route: 'webhook',
@@ -96,7 +110,11 @@ export async function POST(request: NextRequest) {
         })
         return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
       }
+      sigStatus = 'bypassed'
+    } else {
+      sigStatus = 'valid'
     }
+    addStep('Signature', `status=${sigStatus}`)
 
     // ── Step 6: Parse body ────────────────────────────────────────────────────
     let body: { event: string; data: Record<string, unknown> }
@@ -110,9 +128,22 @@ export async function POST(request: NextRequest) {
     if (!event || !data) {
       return NextResponse.json({ error: 'Missing event or data' }, { status: 400 })
     }
+    addStep('Payload Parsed', `event=${event}`)
 
     const admin = supabaseAdmin()
     const ownerUserId = keyRecord.user_id
+
+    // Resolve integration_id from api key
+    let integrationId: string | null = null
+    try {
+      const { data: intg } = await admin
+        .from('website_integrations')
+        .select('id')
+        .eq('website_api_key', apiKey)
+        .eq('user_id', ownerUserId)
+        .maybeSingle()
+      integrationId = intg?.id ?? null
+    } catch { /* non-fatal */ }
 
     // ── Step 7: Log webhook receipt ───────────────────────────────────────────
     const { data: webhookLog } = await admin.from('integration_webhook_logs').insert({
@@ -123,8 +154,52 @@ export async function POST(request: NextRequest) {
       status: 'received',
     }).select('id').maybeSingle()
 
-    // ── Step 8: Process event ─────────────────────────────────────────────────
-    const result = await handleEvent(admin, event, data as any, ownerUserId)
+    // Insert incoming_events (forensic log) before processing
+    const eventId = (data as Record<string, unknown>).event_id as string || crypto.randomUUID()
+    try {
+      const { data: evRow } = await admin.from('incoming_events').insert({
+        user_id:          ownerUserId,
+        integration_id:   integrationId,
+        event_id:         eventId,
+        event_name:       event,
+        source_ip:        ip,
+        user_agent:       userAgent,
+        signature_status: sigStatus,
+        api_key_prefix:   apiKey.substring(0, 8),
+        payload:          data,
+        status:           'processing',
+        processing_steps: steps,
+      }).select('id').maybeSingle()
+      incomingEventId = evRow?.id ?? null
+    } catch (e) {
+      console.warn('[webhook] Failed to insert incoming_event:', e)
+    }
+
+    // Process event
+    const result = await handleEvent(admin, event, data as any, ownerUserId, steps)
+    const duration = Date.now() - startTime
+
+    // Determine final status
+    const r = result as any
+    const finalStatus = r.ignored ? 'ignored' : r.success ? 'processed' : 'failed'
+
+    // Update incoming_events with final result
+    if (incomingEventId) {
+      void admin.from('incoming_events').update({
+        status:                 finalStatus,
+        processing_duration_ms: duration,
+        handler_used:           r.handler ?? null,
+        error_message:          r.error ?? null,
+        error_type:             r.error_type ?? null,
+        result_contact_id:      r.contact_id ?? null,
+        result_order_ref:       r.order_ref ?? (r.order_id ? String(r.order_id) : null),
+        result_pipeline_id:     r.pipeline_id ?? null,
+        result_conversation_id: r.conversation_id ?? null,
+        processing_steps:       steps,
+        debug_info:             r.debug_info ?? null,
+        updated_at:             new Date().toISOString(),
+      }).eq('id', incomingEventId)
+    }
 
     // Update webhook log
     void admin.from('integration_webhook_logs').update({
@@ -137,6 +212,20 @@ export async function POST(request: NextRequest) {
 
   } catch (err) {
     console.error('[integration/webhook] Unhandled error:', err)
+    const duration = Date.now() - startTime
+    if (incomingEventId) {
+      try {
+        const admin = supabaseAdmin()
+        void admin.from('incoming_events').update({
+          status: 'failed',
+          processing_duration_ms: duration,
+          error_message: String(err),
+          error_type: 'server_error',
+          processing_steps: steps,
+          updated_at: new Date().toISOString(),
+        }).eq('id', incomingEventId)
+      } catch { /* ignore */ }
+    }
     return NextResponse.json({
       success: false,
       error: 'Internal server error',
@@ -144,45 +233,74 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// ── Event dispatcher ──────────────────────────────────────────────────────────
-async function handleEvent(admin: any, event: string, data: any, ownerUserId: string) {
+// Known handler names for debug_info on unknown events
+const KNOWN_HANDLERS = [
+  'order.placed','order.confirmed','order.packed','order.shipped',
+  'order.delivered','order.cancelled','payment.success','payment.failed',
+  'cart.abandoned','cart.recovered','customer.created','customer.updated',
+  'customer.login','trigger.order_created','trigger.payment_success',
+  'contact.tag_added','product.viewed','checkout.started',
+]
+
+// Event dispatcher
+async function handleEvent(
+  admin: any,
+  event: string,
+  data: any,
+  ownerUserId: string,
+  steps: { time: string; step: string; detail?: string; ok: boolean }[],
+) {
+  const addStep = (step: string, detail?: string, ok = true) =>
+    steps.push({ time: new Date().toISOString(), step, detail, ok })
+
   switch (event) {
-    // ── Order events (dot notation from crm_hooks.php) ─────────────────────
-    case 'order.placed':       return handleOrderPlaced(admin, data, ownerUserId)
-    case 'order.confirmed':    return handleOrderStatusChange(admin, data, 'confirmed', ownerUserId)
-    case 'order.packed':       return handleOrderStatusChange(admin, data, 'packed', ownerUserId)
-    case 'order.shipped':      return handleOrderStatusChange(admin, data, 'shipped', ownerUserId)
-    case 'order.delivered':    return handleOrderStatusChange(admin, data, 'delivered', ownerUserId)
-    case 'order.cancelled':    return handleOrderStatusChange(admin, data, 'cancelled', ownerUserId)
-    case 'payment.success':    return handlePaymentSuccess(admin, data, ownerUserId)
-    case 'payment.failed':     return handlePaymentFailed(admin, data, ownerUserId)
-    case 'cart.abandoned':     return handleCartAbandoned(admin, data, ownerUserId)
-    case 'cart.recovered':     return handleCartRecovered(admin, data, ownerUserId)
-    case 'customer.created':   return handleCustomerCreated(admin, data, ownerUserId)
-    case 'customer.updated':   return handleCustomerUpdated(admin, data, ownerUserId)
-    case 'customer.login':     return handleCustomerLogin(admin, data, ownerUserId)
+    case 'order.placed':          addStep('Handler', 'handleOrderPlaced');              return handleOrderPlaced(admin, data, ownerUserId, addStep)
+    case 'order.confirmed':       addStep('Handler', 'handleOrderStatusChange[confirmed]'); return handleOrderStatusChange(admin, data, 'confirmed', ownerUserId, addStep)
+    case 'order.packed':          addStep('Handler', 'handleOrderStatusChange[packed]');    return handleOrderStatusChange(admin, data, 'packed', ownerUserId, addStep)
+    case 'order.shipped':         addStep('Handler', 'handleOrderStatusChange[shipped]');   return handleOrderStatusChange(admin, data, 'shipped', ownerUserId, addStep)
+    case 'order.delivered':       addStep('Handler', 'handleOrderStatusChange[delivered]'); return handleOrderStatusChange(admin, data, 'delivered', ownerUserId, addStep)
+    case 'order.cancelled':       addStep('Handler', 'handleOrderStatusChange[cancelled]'); return handleOrderStatusChange(admin, data, 'cancelled', ownerUserId, addStep)
+    case 'payment.success':       addStep('Handler', 'handlePaymentSuccess');           return handlePaymentSuccess(admin, data, ownerUserId, addStep)
+    case 'payment.failed':        addStep('Handler', 'handlePaymentFailed');            return handlePaymentFailed(admin, data, ownerUserId, addStep)
+    case 'cart.abandoned':        addStep('Handler', 'handleCartAbandoned');            return handleCartAbandoned(admin, data, ownerUserId, addStep)
+    case 'cart.recovered':        addStep('Handler', 'handleCartRecovered');            return handleCartRecovered(admin, data, ownerUserId, addStep)
+    case 'customer.created':      addStep('Handler', 'handleCustomerCreated');          return handleCustomerCreated(admin, data, ownerUserId, addStep)
+    case 'customer.updated':      addStep('Handler', 'handleCustomerUpdated');          return handleCustomerUpdated(admin, data, ownerUserId, addStep)
+    case 'customer.login':        addStep('Handler', 'handleCustomerLogin');            return handleCustomerLogin(admin, data, ownerUserId, addStep)
+    case 'trigger.order_created':   addStep('Handler', 'handleTriggerOrderCreated');   return handleTriggerOrderCreated(admin, data, ownerUserId, addStep)
+    case 'trigger.payment_success': addStep('Handler', 'handleTriggerPaymentSuccess'); return handleTriggerPaymentSuccess(admin, data, ownerUserId, addStep)
+    case 'contact.tag_added':     addStep('Handler', 'handleContactTagAdded');          return handleContactTagAdded(admin, data, ownerUserId, addStep)
+    case 'product.viewed':        addStep('Handler', 'handleProductViewed');            return handleProductViewed(admin, data, ownerUserId, addStep)
+    case 'checkout.started':      addStep('Handler', 'handleCheckoutStarted');          return handleCheckoutStarted(admin, data, ownerUserId, addStep)
 
-    // ── Trigger-engine events (trigger.* namespace from crm_trigger_engine.php)
-    //    These are fired by the enterprise trigger engine and use a different
-    //    naming convention from the dot-notation hooks above.
-    case 'trigger.order_created':   return handleTriggerOrderCreated(admin, data, ownerUserId)
-    case 'trigger.payment_success': return handleTriggerPaymentSuccess(admin, data, ownerUserId)
-
-    // ── Behavioural / marketing events ────────────────────────────────────
-    case 'contact.tag_added':  return handleContactTagAdded(admin, data, ownerUserId)
-    case 'product.viewed':     return handleProductViewed(admin, data, ownerUserId)
-    case 'checkout.started':   return handleCheckoutStarted(admin, data, ownerUserId)
-
-    default:
+    default: {
       console.log(`[integration/webhook] Unknown event: ${event}`)
-      return { success: true, message: `Event '${event}' acknowledged but not handled` }
+      addStep('Handler Lookup', `No handler for '${event}'`, false)
+      return {
+        success: true,
+        ignored: true,
+        handler: 'none',
+        message: `Event '${event}' acknowledged but not handled`,
+        debug_info: {
+          reason: `No registered handler found for '${event}'`,
+          handlers_checked: KNOWN_HANDLERS,
+          closest_match: KNOWN_HANDLERS.find(h => h.split('.')[0] === event.split('.')[0]) ?? null,
+          recommendation: event.startsWith('trigger.')
+            ? `Map '${event}' to an existing handler in webhook/route.ts`
+            : `Add 'case \'${event}\':' to handleEvent() and implement handler`,
+        },
+      }
+    }
   }
 }
 
-async function handleOrderPlaced(admin: any, data: any, ownerUserId: string) {
+type StepFn = (step: string, detail?: string, ok?: boolean) => void
+
+async function handleOrderPlaced(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
   const { order_id, customer_name, phone, email, total, items, payment_method } = data
   const contact = await findOrCreateContact(admin, { name: customer_name, phone, email }, ownerUserId)
-  if (!contact) return { success: false, error: 'Failed to create contact' }
+  if (!contact) { addStep('Contact', 'Failed to create', false); return { success: false, error: 'Failed to create contact', handler: 'handleOrderPlaced' } }
+  addStep('Contact', `id=${contact.id}`)
 
   await admin.from('contact_notes').insert({
     contact_id: contact.id,
@@ -190,6 +308,7 @@ async function handleOrderPlaced(admin: any, data: any, ownerUserId: string) {
     content: `🛍️ Order #${order_id} placed — ₹${total} via ${payment_method ?? 'unknown'}`,
     type: 'system',
   })
+  addStep('Note', `Order #${order_id} noted`)
 
   // Revenue attribution
   if (total && parseFloat(String(total)) > 0) {
@@ -206,13 +325,15 @@ async function handleOrderPlaced(admin: any, data: any, ownerUserId: string) {
 
   await ensureTag(admin, contact, 'customer')
   await triggerAutomation(admin, contact, 'order_placed', data)
-  return { success: true, contact_id: contact.id, message: 'Order event processed' }
+  addStep('Automation', 'order_placed triggered')
+  return { success: true, contact_id: contact.id, handler: 'handleOrderPlaced', message: 'Order event processed' }
 }
 
-async function handleOrderStatusChange(admin: any, data: any, status: string, ownerUserId: string) {
+async function handleOrderStatusChange(admin: any, data: any, status: string, ownerUserId: string, addStep: StepFn = () => {}) {
   const { order_id, phone, tracking_number, tracking_url } = data
   const contact = await findContactByPhone(admin, phone, ownerUserId)
-  if (!contact) return { success: true, message: 'Contact not found, skipping' }
+  if (!contact) return { success: true, handler: 'handleOrderStatusChange', message: 'Contact not found, skipping' }
+  addStep('Contact', `id=${contact.id}`)
 
   const statusMessages: Record<string, string> = {
     confirmed: `✅ Order #${order_id} confirmed`,
@@ -228,38 +349,47 @@ async function handleOrderStatusChange(admin: any, data: any, status: string, ow
     content: statusMessages[status] ?? `Order #${order_id} status: ${status}`,
     type: 'system',
   })
+  addStep('Note', `status=${status} noted`)
 
   await triggerAutomation(admin, contact, `order_${status}`, data)
-  return { success: true, contact_id: contact.id }
+  addStep('Automation', `order_${status} triggered`)
+  return { success: true, contact_id: contact.id, handler: 'handleOrderStatusChange' }
 }
 
-async function handlePaymentSuccess(admin: any, data: any, ownerUserId: string) {
+async function handlePaymentSuccess(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
   const { order_id, phone, amount } = data
   const contact = await findContactByPhone(admin, phone, ownerUserId)
-  if (!contact) return { success: true, message: 'Contact not found' }
+  if (!contact) return { success: true, handler: 'handlePaymentSuccess', message: 'Contact not found' }
+  addStep('Contact', `id=${contact.id}`)
   await admin.from('contact_notes').insert({
     contact_id: contact.id, user_id: ownerUserId,
     content: `💳 Payment of ₹${amount} received for order #${order_id}`, type: 'system',
   })
+  addStep('Note', `Payment ₹${amount} noted`)
   await ensureTag(admin, contact, 'paid')
-  return { success: true, contact_id: contact.id }
+  await triggerAutomation(admin, contact, 'payment_success', data)
+  addStep('Automation', 'payment_success triggered')
+  return { success: true, contact_id: contact.id, handler: 'handlePaymentSuccess' }
 }
 
-async function handlePaymentFailed(admin: any, data: any, ownerUserId: string) {
+async function handlePaymentFailed(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
   const { order_id, phone } = data
   const contact = await findContactByPhone(admin, phone, ownerUserId)
-  if (!contact) return { success: true, message: 'Contact not found' }
+  if (!contact) return { success: true, handler: 'handlePaymentFailed', message: 'Contact not found' }
+  addStep('Contact', `id=${contact.id}`)
   await admin.from('contact_notes').insert({
     contact_id: contact.id, user_id: ownerUserId,
     content: `⚠️ Payment failed for order #${order_id}`, type: 'system',
   })
-  return { success: true, contact_id: contact.id }
+  addStep('Note', `Payment failed noted`)
+  return { success: true, contact_id: contact.id, handler: 'handlePaymentFailed' }
 }
 
-async function handleCartAbandoned(admin: any, data: any, ownerUserId: string) {
+async function handleCartAbandoned(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
   const { phone, email, cart_total, items, checkout_url } = data
   const contact = await findContactByPhone(admin, phone, ownerUserId)
-  if (!contact) return { success: true, message: 'Contact not found' }
+  if (!contact) return { success: true, handler: 'handleCartAbandoned', message: 'Contact not found' }
+  addStep('Contact', `id=${contact.id}`)
   await admin.from('contact_notes').insert({
     contact_id: contact.id, user_id: ownerUserId,
     content: `🛒 Cart abandoned — ₹${cart_total} (${items?.length ?? '?'} items)${checkout_url ? ` — ${checkout_url}` : ''}`,
@@ -267,67 +397,69 @@ async function handleCartAbandoned(admin: any, data: any, ownerUserId: string) {
   })
   await ensureTag(admin, contact, 'cart-abandoned')
   await triggerAutomation(admin, contact, 'cart_abandoned', data)
-  return { success: true, contact_id: contact.id, message: 'Cart abandonment tracked' }
+  addStep('Automation', 'cart_abandoned triggered')
+  return { success: true, contact_id: contact.id, handler: 'handleCartAbandoned', message: 'Cart abandonment tracked' }
 }
 
-async function handleCartRecovered(admin: any, data: any, ownerUserId: string) {
+async function handleCartRecovered(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
   const { phone, order_id } = data
   const contact = await findContactByPhone(admin, phone, ownerUserId)
-  if (!contact) return { success: true, message: 'Contact not found' }
+  if (!contact) return { success: true, handler: 'handleCartRecovered', message: 'Contact not found' }
+  addStep('Contact', `id=${contact.id}`)
   await removeTag(admin, contact, 'cart-abandoned')
   await ensureTag(admin, contact, 'cart-recovered')
-  return { success: true, contact_id: contact.id }
+  addStep('Tags', 'cart-abandoned removed, cart-recovered added')
+  return { success: true, contact_id: contact.id, handler: 'handleCartRecovered' }
 }
 
-async function handleCustomerCreated(admin: any, data: any, ownerUserId: string) {
+async function handleCustomerCreated(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
   const { name, phone, email, local_user_id } = data
   const contact = await findOrCreateContact(admin, { name, phone, email, local_user_id }, ownerUserId)
-  if (!contact) return { success: false, error: 'Failed to create contact' }
+  if (!contact) { addStep('Contact', 'Failed to create', false); return { success: false, error: 'Failed to create contact', handler: 'handleCustomerCreated' } }
+  addStep('Contact', `id=${contact.id}`)
   await ensureTag(admin, contact, 'new-customer')
   await triggerAutomation(admin, contact, 'customer_created', data)
-  return { success: true, contact_id: contact.id }
+  addStep('Automation', 'customer_created triggered')
+  return { success: true, contact_id: contact.id, handler: 'handleCustomerCreated' }
 }
 
-async function handleCustomerUpdated(admin: any, data: any, ownerUserId: string) {
+async function handleCustomerUpdated(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
   const { phone, email, name, local_user_id } = data
   const contact = await findContactByPhone(admin, phone, ownerUserId)
-  if (!contact) return { success: true, message: 'Contact not found' }
+  if (!contact) return { success: true, handler: 'handleCustomerUpdated', message: 'Contact not found' }
+  addStep('Contact', `id=${contact.id}`)
   const updates: any = {}
   if (name) updates.name = name
   if (email) updates.email = email
   if (local_user_id) updates.external_id = String(local_user_id)
   if (Object.keys(updates).length > 0) {
     await admin.from('contacts').update(updates).eq('id', contact.id)
+    addStep('Contact Updated', Object.keys(updates).join(', '))
   }
-  return { success: true, contact_id: contact.id }
+  return { success: true, contact_id: contact.id, handler: 'handleCustomerUpdated' }
 }
 
-async function handleCustomerLogin(admin: any, data: any, ownerUserId: string) {
+async function handleCustomerLogin(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
   const { phone } = data
   const contact = await findContactByPhone(admin, phone, ownerUserId)
-  if (!contact) return { success: true, message: 'Contact not found' }
+  if (!contact) return { success: true, handler: 'handleCustomerLogin', message: 'Contact not found' }
+  addStep('Contact', `id=${contact.id}`)
   await admin.from('contacts').update({ last_contacted_at: new Date().toISOString() }).eq('id', contact.id)
-  return { success: true, contact_id: contact.id }
+  addStep('Contact', 'last_contacted_at updated')
+  return { success: true, contact_id: contact.id, handler: 'handleCustomerLogin' }
 }
 
-// ── New handlers for previously-unknown events ─────────────────────────────────
-
-/**
- * trigger.order_created — fired by crm_trigger_engine.php when an order is placed.
- * Creates a CRM order record and upserts the contact, then fires order_created automation.
- */
-async function handleTriggerOrderCreated(admin: any, data: any, ownerUserId: string) {
+async function handleTriggerOrderCreated(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
   const { order_id, user_id, total, payment_method, customer_name, phone, email } = data
 
-  // 1. Upsert the contact
   const contact = await findOrCreateContact(
     admin,
     { name: customer_name, phone, email, local_user_id: user_id },
     ownerUserId,
   )
-  if (!contact) return { success: false, error: 'Failed to create/find contact' }
+  if (!contact) { addStep('Contact', 'Failed to create', false); return { success: false, error: 'Failed to create/find contact', handler: 'handleTriggerOrderCreated' } }
+  addStep('Contact', `id=${contact.id}`)
 
-  // 2. Persist a CRM order record so the contact has a full purchase history
   const { error: orderErr } = await admin.from('crm_orders').upsert({
     user_id:     ownerUserId,
     contact_id:  contact.id,
@@ -343,15 +475,14 @@ async function handleTriggerOrderCreated(admin: any, data: any, ownerUserId: str
     console.warn('[integration/webhook] crm_orders upsert skipped (table may not exist):', orderErr.message)
   }
 
-  // 3. Add a contact note
   await admin.from('contact_notes').insert({
     contact_id: contact.id,
     user_id:    ownerUserId,
     content:    `🛍️ [Trigger] Order #${order_id} created — ₹${total} via ${payment_method ?? 'unknown'}`,
     type:       'system',
   })
+  addStep('Note', `Order #${order_id} noted`)
 
-  // 4. Revenue attribution
   if (total && parseFloat(String(total)) > 0) {
     void admin.from('integration_revenue_events').insert({
       user_id:      ownerUserId,
@@ -364,18 +495,14 @@ async function handleTriggerOrderCreated(admin: any, data: any, ownerUserId: str
     })
   }
 
-  // 5. Tag and automate
   await ensureTag(admin, contact, 'customer')
   await triggerAutomation(admin, contact, 'order_created', data)
+  addStep('Automation', 'order_created triggered')
 
-  return { success: true, contact_id: contact.id, order_id, message: 'Trigger order_created processed' }
+  return { success: true, contact_id: contact.id, order_ref: String(order_id), handler: 'handleTriggerOrderCreated', message: 'Trigger order_created processed' }
 }
 
-/**
- * trigger.payment_success — fired by crm_trigger_engine.php after a payment is confirmed.
- * Updates the order's payment status in CRM and tags the contact 'paid'.
- */
-async function handleTriggerPaymentSuccess(admin: any, data: any, ownerUserId: string) {
+async function handleTriggerPaymentSuccess(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
   const { order_id, user_id, amount, method, phone } = data
 
   const contact = await findOrCreateContact(
@@ -383,9 +510,9 @@ async function handleTriggerPaymentSuccess(admin: any, data: any, ownerUserId: s
     { phone, local_user_id: user_id },
     ownerUserId,
   )
-  if (!contact) return { success: true, message: 'Contact not found, payment logged only' }
+  if (!contact) return { success: true, handler: 'handleTriggerPaymentSuccess', message: 'Contact not found, payment logged only' }
+  addStep('Contact', `id=${contact.id}`)
 
-  // Update CRM order payment status
   const { error: updateErr } = await admin.from('crm_orders')
     .update({ status: 'paid', payment_method: method ?? null, paid_at: new Date().toISOString() })
     .eq('user_id', ownerUserId)
@@ -395,77 +522,65 @@ async function handleTriggerPaymentSuccess(admin: any, data: any, ownerUserId: s
     console.warn('[integration/webhook] crm_orders payment update skipped:', updateErr.message)
   }
 
-  // Contact note
   await admin.from('contact_notes').insert({
     contact_id: contact.id,
     user_id:    ownerUserId,
     content:    `💳 [Trigger] Payment ₹${amount} received for order #${order_id} via ${method ?? 'unknown'}`,
     type:       'system',
   })
+  addStep('Note', `Payment ₹${amount} noted`)
 
   await ensureTag(admin, contact, 'paid')
   await triggerAutomation(admin, contact, 'payment_success', data)
+  addStep('Automation', 'payment_success triggered')
 
-  return { success: true, contact_id: contact.id, message: 'Trigger payment_success processed' }
+  return { success: true, contact_id: contact.id, handler: 'handleTriggerPaymentSuccess', message: 'Trigger payment_success processed' }
 }
 
-/**
- * contact.tag_added — fired by crm_trigger_engine.php when a tag is added to a contact.
- * Propagates the tag into WACRM contact_tags and fires any tag-based automations.
- */
-async function handleContactTagAdded(admin: any, data: any, ownerUserId: string) {
+async function handleContactTagAdded(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
   const { user_id, tag } = data
   if (!tag) return { success: true, message: 'No tag provided' }
 
-  const contact = await findOrCreateContact(
-    admin,
-    { local_user_id: user_id },
-    ownerUserId,
-  )
+  const contact = await findOrCreateContact(admin, { local_user_id: user_id }, ownerUserId)
   if (!contact) return { success: true, message: 'Contact not found' }
+  addStep('Contact', `id=${contact.id}`)
 
   await ensureTag(admin, contact, String(tag))
   await triggerAutomation(admin, contact, 'contact_tag_added', { ...data, tag_name: tag })
+  addStep('Tags', `Tag ${tag} added`)
 
-  return { success: true, contact_id: contact.id, tag, message: 'Tag synced to CRM contact' }
+  return { success: true, contact_id: contact.id, handler: 'handleContactTagAdded', tag, message: 'Tag synced to CRM contact' }
 }
 
-/**
- * product.viewed — behavioural event fired from product.php.
- * Records the view in a product_views table and can trigger browse-abandon automations.
- */
-async function handleProductViewed(admin: any, data: any, ownerUserId: string) {
+async function handleProductViewed(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
   const { product_id, user_id, phone } = data
 
-  // Record the view event (table may not exist on all deployments — soft fail)
   const { error: viewErr } = await admin.from('contact_product_views').insert({
     user_id:    ownerUserId,
-    contact_id: null,   // will be enriched below if user is known
+    contact_id: null,
     product_id: String(product_id ?? ''),
     external_user_id: user_id ? String(user_id) : null,
     viewed_at:  new Date().toISOString(),
   })
   if (viewErr) {
     console.info('[integration/webhook] contact_product_views insert skipped (table may not exist):', viewErr.message)
+  } else {
+    addStep('View Logged', `product_id=${product_id}`)
   }
 
-  // If user is known, update the contact record
   if (user_id || phone) {
     const contact = await findOrCreateContact(admin, { phone, local_user_id: user_id }, ownerUserId)
     if (contact) {
       await admin.from('contacts').update({ last_contacted_at: new Date().toISOString() }).eq('id', contact.id)
-      return { success: true, contact_id: contact.id, message: 'Product view tracked' }
+      addStep('Contact', `id=${contact.id}`)
+      return { success: true, contact_id: contact.id, handler: 'handleProductViewed', message: 'Product view tracked' }
     }
   }
 
-  return { success: true, message: 'Product view logged (anonymous)' }
+  return { success: true, handler: 'handleProductViewed', message: 'Product view logged (anonymous)' }
 }
 
-/**
- * checkout.started — fired from checkout.php when a user begins checkout.
- * Marks the contact as a hot lead and triggers cart-abandonment automations if they don't complete.
- */
-async function handleCheckoutStarted(admin: any, data: any, ownerUserId: string) {
+async function handleCheckoutStarted(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
   const { user_id, total, item_count, phone } = data
 
   const contact = await findOrCreateContact(

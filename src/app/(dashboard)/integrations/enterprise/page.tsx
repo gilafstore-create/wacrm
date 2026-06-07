@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useCallback, type ReactNode, useRef } from "react";
 import {
   Globe, Plus, CheckCircle2, XCircle, RefreshCw, Zap, Webhook, Clock,
   Shield, Eye, EyeOff, Copy, ChevronRight, Trash2, Activity, Wifi,
@@ -8,6 +8,7 @@ import {
   AlertTriangle, TrendingUp, Database, Server, BarChart2, Bell,
   Settings, ArrowRight, ChevronDown, ChevronUp, Terminal, Download,
   Filter, Check, X, MoreVertical, Sparkles, Layers, Network,
+  Radio, Telescope, ChevronLeft, AlertCircle, Box, Hash,
 } from "lucide-react";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -1024,22 +1025,556 @@ function AuditCenter() {
   );
 }
 
+// ─── Auto Sync Toggle ─────────────────────────────────────────────────────────
+
+function AutoSyncToggle({ intgId, enabled, onToggled }: { intgId: string; enabled: boolean; onToggled: () => void }) {
+  const [loading, setLoading] = useState(false);
+
+  const toggle = async () => {
+    setLoading(true);
+    await fetch("/api/integrations", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: intgId, auto_sync_enabled: !enabled }),
+    });
+    setLoading(false);
+    onToggled();
+  };
+
+  return (
+    <button
+      onClick={toggle}
+      disabled={loading}
+      className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-all ${
+        enabled
+          ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25"
+          : "bg-slate-700/50 text-slate-400 border border-slate-600/40 hover:bg-slate-700"
+      }`}
+    >
+      {loading ? (
+        <Loader2 className="h-3 w-3 animate-spin" />
+      ) : (
+        <div className={`h-2 w-2 rounded-full ${enabled ? "bg-emerald-400" : "bg-slate-500"}`} />
+      )}
+      {enabled ? "Enabled" : "Disabled"}
+    </button>
+  );
+}
+
+// ─── Event Inspector ─────────────────────────────────────────────────────────
+
+interface IncomingEvent {
+  id: string;
+  event_id: string;
+  event_name: string;
+  source_ip: string | null;
+  status: "processed" | "ignored" | "partial" | "failed" | "processing";
+  processing_duration_ms: number | null;
+  handler_used: string | null;
+  error_message: string | null;
+  error_type: string | null;
+  result_contact_id: string | null;
+  result_order_ref: string | null;
+  signature_status: string;
+  payload: Record<string, unknown> | null;
+  processing_steps: { time: string; step: string; detail?: string; ok: boolean }[] | null;
+  debug_info: Record<string, unknown> | null;
+  retry_count: number;
+  created_at: string;
+}
+
+function EventStatusBadge({ status }: { status: string }) {
+  const map: Record<string, { label: string; cls: string; dot: string }> = {
+    processed: { label: "Processed", cls: "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30", dot: "bg-emerald-400" },
+    ignored:   { label: "Ignored",   cls: "bg-amber-500/15 text-amber-400 border border-amber-500/30",   dot: "bg-amber-400" },
+    partial:   { label: "Partial",   cls: "bg-orange-500/15 text-orange-400 border border-orange-500/30", dot: "bg-orange-400" },
+    failed:    { label: "Failed",    cls: "bg-red-500/15 text-red-400 border border-red-500/30",         dot: "bg-red-400" },
+    processing:{ label: "Processing",cls: "bg-blue-500/15 text-blue-400 border border-blue-500/30",      dot: "bg-blue-400 animate-pulse" },
+  };
+  const s = map[status] || map.ignored;
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${s.cls}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
+      {s.label}
+    </span>
+  );
+}
+
+function SigBadge({ status }: { status: string }) {
+  const map: Record<string, string> = {
+    valid:    "text-emerald-400",
+    bypassed: "text-amber-400",
+    missing:  "text-red-400",
+    invalid:  "text-red-400",
+    unknown:  "text-slate-500",
+  };
+  return <span className={`text-xs font-mono ${map[status] || map.unknown}`}>{status}</span>;
+}
+
+function JsonViewer({ data }: { data: unknown }) {
+  const [copied, setCopied] = useState(false);
+  const [search, setSearch] = useState("");
+  const [collapsed, setCollapsed] = useState(false);
+  const raw = JSON.stringify(data, null, 2);
+
+  const highlighted = raw
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/("[^"]+")\s*:/g, '<span class="text-violet-300">$1</span>:')
+    .replace(/:\s*("[^"]*")/g, ': <span class="text-emerald-300">$1</span>')
+    .replace(/:\s*(\d+\.?\d*)/g, ': <span class="text-amber-300">$1</span>')
+    .replace(/:\s*(true|false|null)/g, ': <span class="text-blue-300">$1</span>');
+
+  const lines = highlighted.split("\n");
+  const filtered = search
+    ? lines.filter(l => l.toLowerCase().includes(search.toLowerCase()))
+    : lines;
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(raw).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-700/60 bg-slate-950 overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700/60 bg-slate-900/60">
+        <div className="flex items-center gap-2">
+          <Hash className="h-3.5 w-3.5 text-slate-500" />
+          <span className="text-xs text-slate-400">Raw Payload</span>
+          <span className="text-xs text-slate-600">({raw.length} bytes)</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-slate-500" />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search…"
+              className="rounded pl-6 pr-2 py-1 text-xs bg-slate-800 border border-slate-700 text-slate-300 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-violet-500 w-32"
+            />
+          </div>
+          <button onClick={() => setCollapsed(c => !c)} className="rounded p-1 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors">
+            {collapsed ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
+          </button>
+          <button onClick={handleCopy} className="flex items-center gap-1 rounded px-2 py-1 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors text-xs">
+            {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+      </div>
+      {!collapsed && (
+        <div className="overflow-auto max-h-64 p-3">
+          <pre className="text-xs font-mono leading-relaxed">
+            {filtered.map((line, i) => (
+              <div key={i} className={`${search && line.toLowerCase().includes(search.toLowerCase()) ? "bg-violet-500/10" : ""}`}
+                dangerouslySetInnerHTML={{ __html: line }}
+              />
+            ))}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProcessingTimeline({ steps }: { steps: IncomingEvent["processing_steps"] }) {
+  if (!steps || steps.length === 0) return <p className="text-xs text-slate-500">No timeline data.</p>;
+  return (
+    <div className="space-y-1.5">
+      {steps.map((s, i) => (
+        <div key={i} className="flex items-start gap-3">
+          <div className="flex-shrink-0 mt-0.5">
+            {s.ok
+              ? <div className="h-4 w-4 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center"><Check className="h-2.5 w-2.5 text-emerald-400" /></div>
+              : <div className="h-4 w-4 rounded-full bg-red-500/20 border border-red-500/40 flex items-center justify-center"><X className="h-2.5 w-2.5 text-red-400" /></div>
+            }
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className={`text-xs font-medium ${s.ok ? "text-slate-200" : "text-red-300"}`}>{s.step}</span>
+              {s.detail && <span className="text-xs text-slate-500 truncate">{s.detail}</span>}
+            </div>
+            <div className="text-xs text-slate-600 font-mono mt-0.5">{new Date(s.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</div>
+          </div>
+          {i < steps.length - 1 && (
+            <div className="absolute left-5 ml-1.5 mt-4 h-2 border-l border-slate-700" />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function EventInspectionModal({ ev, onClose }: { ev: IncomingEvent; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/80 backdrop-blur-sm overflow-y-auto py-8 px-4">
+      <div className="w-full max-w-3xl rounded-2xl border border-white/10 bg-slate-900 shadow-2xl">
+        {/* Modal Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-500/10 text-violet-400">
+              <Telescope className="h-4 w-4" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-white font-mono">{ev.event_name}</h2>
+              <p className="text-xs text-slate-500">Event Inspector</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-2 hover:bg-slate-800 text-slate-400 hover:text-white transition-colors">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-6">
+          {/* Event Overview */}
+          <div>
+            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Event Overview</h3>
+            <div className="grid grid-cols-2 gap-3">
+              {([
+                ["Event Name",   <span className="font-mono text-violet-300">{ev.event_name}</span>],
+                ["Event ID",     <span className="font-mono text-xs text-slate-400">{ev.event_id}</span>],
+                ["Status",       <EventStatusBadge status={ev.status} />],
+                ["Signature",    <SigBadge status={ev.signature_status} />],
+                ["Source IP",    <span className="font-mono text-xs">{ev.source_ip || "—"}</span>],
+                ["Handler",      <span className="font-mono text-xs text-slate-400">{ev.handler_used || "none"}</span>],
+                ["Received",     <span className="text-xs">{new Date(ev.created_at).toLocaleString()}</span>],
+                ["Duration",     <span className="text-xs">{ev.processing_duration_ms != null ? `${ev.processing_duration_ms}ms` : "—"}</span>],
+              ] as [string, ReactNode][]).map(([k, v]) => (
+                <div key={k} className="flex items-center justify-between rounded-lg bg-slate-800/40 px-3 py-2">
+                  <span className="text-xs text-slate-500">{k}</span>
+                  <span className="text-xs text-slate-200 font-medium">{v}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Created Records */}
+          {(ev.result_contact_id || ev.result_order_ref) && (
+            <div>
+              <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Created Records</h3>
+              <div className="space-y-2">
+                {ev.result_contact_id && (
+                  <div className="flex items-center gap-2 rounded-lg bg-emerald-500/5 border border-emerald-500/20 px-3 py-2">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                    <span className="text-xs text-slate-400">Contact ID:</span>
+                    <span className="text-xs font-mono text-emerald-300">{ev.result_contact_id}</span>
+                  </div>
+                )}
+                {ev.result_order_ref && (
+                  <div className="flex items-center gap-2 rounded-lg bg-blue-500/5 border border-blue-500/20 px-3 py-2">
+                    <Box className="h-3.5 w-3.5 text-blue-400" />
+                    <span className="text-xs text-slate-400">Order Ref:</span>
+                    <span className="text-xs font-mono text-blue-300">{ev.result_order_ref}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Error Analysis */}
+          {ev.status === "failed" && ev.error_message && (
+            <div>
+              <h3 className="text-xs font-semibold text-red-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+                <AlertCircle className="h-3.5 w-3.5" /> Error Analysis
+              </h3>
+              <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-4 space-y-2">
+                {ev.error_type && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-slate-500">Type:</span>
+                    <span className="rounded px-2 py-0.5 text-xs bg-red-500/20 text-red-300 font-mono">{ev.error_type}</span>
+                  </div>
+                )}
+                <div>
+                  <span className="text-xs text-slate-500">Message:</span>
+                  <pre className="mt-1 text-xs text-red-300 font-mono whitespace-pre-wrap break-all">{ev.error_message}</pre>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Unknown Event Debug Info */}
+          {ev.status === "ignored" && ev.debug_info && (
+            <div>
+              <h3 className="text-xs font-semibold text-amber-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+                <AlertTriangle className="h-3.5 w-3.5" /> Debug Info — Why Ignored
+              </h3>
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 space-y-3">
+                {(ev.debug_info as any).reason && (
+                  <p className="text-xs text-amber-300">{String((ev.debug_info as any).reason)}</p>
+                )}
+                {(ev.debug_info as any).recommendation && (
+                  <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2">
+                    <span className="text-xs font-semibold text-amber-300">Recommendation: </span>
+                    <span className="text-xs text-slate-300">{String((ev.debug_info as any).recommendation)}</span>
+                  </div>
+                )}
+                {Array.isArray((ev.debug_info as any).handlers_checked) && (
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1.5">Handlers checked ({((ev.debug_info as any).handlers_checked as string[]).length}):</p>
+                    <div className="flex flex-wrap gap-1">
+                      {((ev.debug_info as any).handlers_checked as string[]).map(h => (
+                        <span key={h} className="rounded px-1.5 py-0.5 text-xs bg-slate-800 text-slate-400 font-mono">{h}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Processing Timeline */}
+          <div>
+            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Processing Timeline</h3>
+            <GlassCard className="p-4">
+              <ProcessingTimeline steps={ev.processing_steps} />
+            </GlassCard>
+          </div>
+
+          {/* Raw Payload */}
+          {ev.payload && (
+            <div>
+              <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Raw Payload</h3>
+              <JsonViewer data={ev.payload} />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EventInspector({ integration }: { integration: Integration }) {
+  const [events, setEvents] = useState<IncomingEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [total, setTotal] = useState(0);
+  const [stats, setStats] = useState<Record<string, number>>({});
+  const [selected, setSelected] = useState<IncomingEvent | null>(null);
+  const [liveMode, setLiveMode] = useState(false);
+  const [search, setSearch] = useState("");
+  const [filterStatus, setFilterStatus] = useState("");
+  const [filterEvent, setFilterEvent] = useState("");
+  const [page, setPage] = useState(0);
+  const limit = 25;
+  const liveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+    const params = new URLSearchParams({
+      integration_id: integration.id,
+      limit: String(limit),
+      offset: String(page * limit),
+    });
+    if (filterStatus) params.set("status", filterStatus);
+    if (filterEvent) params.set("event_name", filterEvent);
+    if (search) params.set("q", search);
+    const r = await fetch(`/api/integrations/events?${params}`);
+    if (r.ok) {
+      const d = await r.json();
+      setEvents(d.events || []);
+      setTotal(d.total || 0);
+      setStats(d.stats || {});
+    }
+    setLoading(false);
+  }, [integration.id, page, filterStatus, filterEvent, search]);
+
+  useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (liveMode) {
+      liveTimerRef.current = setInterval(() => load(true), 5000);
+    } else {
+      if (liveTimerRef.current) clearInterval(liveTimerRef.current);
+    }
+    return () => { if (liveTimerRef.current) clearInterval(liveTimerRef.current); };
+  }, [liveMode, load]);
+
+  const STATUSES = ["processed", "ignored", "partial", "failed"];
+  const statColors: Record<string, string> = {
+    processed: "text-emerald-400",
+    ignored:   "text-amber-400",
+    partial:   "text-orange-400",
+    failed:    "text-red-400",
+  };
+
+  return (
+    <div>
+      <SectionHeader
+        icon={<Telescope className="h-4 w-4" />}
+        title="Event Inspector"
+        subtitle="Full forensic trail of every incoming event from Gilaf Store"
+        action={
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setLiveMode(l => !l)}
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                liveMode
+                  ? "bg-red-500/15 text-red-400 border border-red-500/30 hover:bg-red-500/25"
+                  : "border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500"
+              }`}
+            >
+              <Radio className={`h-3 w-3 ${liveMode ? "animate-pulse" : ""}`} />
+              {liveMode ? "Live ON" : "Live OFF"}
+            </button>
+            <button onClick={() => load()} disabled={loading} className="flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-400 hover:text-white hover:border-slate-500 transition-colors">
+              <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
+              Refresh
+            </button>
+          </div>
+        }
+      />
+
+      {/* Stats Row */}
+      <div className="grid grid-cols-4 gap-3 mb-5">
+        <MetricCard icon={<Activity className="h-4 w-4" />} label="Total (24h)" value={Object.values(stats).reduce((a, b) => a + b, 0)} color="violet" />
+        <MetricCard icon={<CheckCircle2 className="h-4 w-4" />} label="Processed" value={stats.processed || 0} color="emerald" />
+        <MetricCard icon={<AlertTriangle className="h-4 w-4" />} label="Ignored" value={stats.ignored || 0} color="amber" />
+        <MetricCard icon={<XCircle className="h-4 w-4" />} label="Failed" value={stats.failed || 0} color={stats.failed > 0 ? "red" : "emerald"} />
+      </div>
+
+      {/* Filters */}
+      <div className="mb-4 flex items-center gap-2 flex-wrap">
+        <div className="relative flex-1 min-w-[160px] max-w-xs">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
+          <input
+            value={search}
+            onChange={e => { setSearch(e.target.value); setPage(0); }}
+            placeholder="Search event, phone, order ID…"
+            className="w-full rounded-lg border border-slate-700 bg-slate-800/60 pl-9 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+          />
+        </div>
+        <select
+          value={filterStatus}
+          onChange={e => { setFilterStatus(e.target.value); setPage(0); }}
+          className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-violet-500"
+        >
+          <option value="">All Statuses</option>
+          {STATUSES.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+        </select>
+        <select
+          value={filterEvent}
+          onChange={e => { setFilterEvent(e.target.value); setPage(0); }}
+          className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-violet-500"
+        >
+          <option value="">All Events</option>
+          {[
+            "order.placed","order.confirmed","order.shipped","order.delivered","order.cancelled",
+            "payment.success","payment.failed","cart.abandoned","cart.recovered",
+            "customer.created","customer.updated","trigger.order_created","trigger.payment_success",
+            "contact.tag_added","product.viewed","checkout.started",
+          ].map(e => <option key={e} value={e}>{e}</option>)}
+        </select>
+        {(search || filterStatus || filterEvent) && (
+          <button onClick={() => { setSearch(""); setFilterStatus(""); setFilterEvent(""); setPage(0); }}
+            className="text-xs text-slate-500 hover:text-slate-300 transition-colors">
+            Clear filters
+          </button>
+        )}
+        {liveMode && (
+          <span className="flex items-center gap-1.5 ml-auto text-xs text-red-400">
+            <Radio className="h-3 w-3 animate-pulse" /> Live — refreshing every 5s
+          </span>
+        )}
+      </div>
+
+      {/* Events Table */}
+      {loading ? (
+        <div className="py-12 flex items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-violet-400" /></div>
+      ) : events.length === 0 ? (
+        <GlassCard className="py-16 text-center">
+          <Telescope className="mx-auto h-10 w-10 text-slate-700 mb-3" />
+          <p className="text-sm text-slate-500">No events yet.</p>
+          <p className="text-xs text-slate-600 mt-1">Events will appear here as Gilaf Store sends webhooks.</p>
+        </GlassCard>
+      ) : (
+        <div className="overflow-hidden rounded-xl border border-white/5">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-800/60">
+              <tr>
+                {["Time", "Event", "Source", "Sig", "Status", "Duration", "Result", ""].map(h => (
+                  <th key={h} className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5 bg-slate-900/40">
+              {events.map(ev => (
+                <tr key={ev.id} className="hover:bg-slate-800/30 transition-colors group cursor-pointer" onClick={() => setSelected(ev)}>
+                  <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap font-mono">
+                    {new Date(ev.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <span className="font-mono text-violet-300">{ev.event_name}</span>
+                  </td>
+                  <td className="px-4 py-2.5 font-mono text-slate-500">{ev.source_ip || "—"}</td>
+                  <td className="px-4 py-2.5"><SigBadge status={ev.signature_status} /></td>
+                  <td className="px-4 py-2.5"><EventStatusBadge status={ev.status} /></td>
+                  <td className="px-4 py-2.5 text-slate-400">
+                    {ev.processing_duration_ms != null ? `${ev.processing_duration_ms}ms` : "—"}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    {ev.result_contact_id && (
+                      <span className="text-emerald-400">Contact ✓</span>
+                    )}
+                    {ev.result_order_ref && (
+                      <span className="text-blue-400 ml-1">Order #{ev.result_order_ref}</span>
+                    )}
+                    {ev.error_message && (
+                      <span className="text-red-400 truncate max-w-[120px] block">{ev.error_message.slice(0, 40)}</span>
+                    )}
+                    {ev.status === "ignored" && !ev.error_message && (
+                      <span className="text-amber-500">Unknown Event</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <button className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-violet-400 hover:text-violet-300">
+                      <Telescope className="h-3.5 w-3.5" />
+                      <span>Inspect</span>
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Pagination */}
+      {total > limit && (
+        <div className="mt-4 flex items-center justify-between">
+          <span className="text-xs text-slate-500">{total} total events · page {page + 1} of {Math.ceil(total / limit)}</span>
+          <div className="flex items-center gap-1.5">
+            <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}
+              className="flex items-center gap-1 rounded-lg border border-slate-700 px-2 py-1 text-xs text-slate-400 hover:text-white hover:border-slate-500 disabled:opacity-40 transition-colors">
+              <ChevronLeft className="h-3 w-3" /> Prev
+            </button>
+            <button onClick={() => setPage(p => p + 1)} disabled={(page + 1) * limit >= total}
+              className="flex items-center gap-1 rounded-lg border border-slate-700 px-2 py-1 text-xs text-slate-400 hover:text-white hover:border-slate-500 disabled:opacity-40 transition-colors">
+              Next <ChevronRight className="h-3 w-3" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Inspection Modal */}
+      {selected && <EventInspectionModal ev={selected} onClose={() => setSelected(null)} />}
+    </div>
+  );
+}
+
 // ─── Enterprise Detail View ───────────────────────────────────────────────────
 
-type EnterpriseTab = "overview" | "keys" | "security" | "health" | "monitor" | "sync" | "webhooks" | "audit";
+type EnterpriseTab = "overview" | "keys" | "security" | "health" | "monitor" | "sync" | "webhooks" | "events" | "audit";
 
 function EnterpriseDetail({ intg, onBack, onRefresh }: { intg: Integration; onBack: () => void; onRefresh: () => void }) {
   const [tab, setTab] = useState<EnterpriseTab>("overview");
 
   const tabs: { id: EnterpriseTab; label: string; icon: React.ReactNode }[] = [
-    { id: "overview", label: "Overview", icon: <BarChart2 className="h-3.5 w-3.5" /> },
-    { id: "keys", label: "API Keys", icon: <Key className="h-3.5 w-3.5" /> },
-    { id: "security", label: "Security", icon: <Shield className="h-3.5 w-3.5" /> },
-    { id: "health", label: "Health", icon: <Activity className="h-3.5 w-3.5" /> },
-    { id: "monitor", label: "Monitor", icon: <Zap className="h-3.5 w-3.5" /> },
-    { id: "sync", label: "Sync", icon: <RefreshCw className="h-3.5 w-3.5" /> },
-    { id: "webhooks", label: "Webhooks", icon: <Webhook className="h-3.5 w-3.5" /> },
-    { id: "audit", label: "Audit", icon: <Terminal className="h-3.5 w-3.5" /> },
+    { id: "overview", label: "Overview",  icon: <BarChart2 className="h-3.5 w-3.5" /> },
+    { id: "keys",     label: "API Keys",  icon: <Key className="h-3.5 w-3.5" /> },
+    { id: "security", label: "Security",  icon: <Shield className="h-3.5 w-3.5" /> },
+    { id: "health",   label: "Health",    icon: <Activity className="h-3.5 w-3.5" /> },
+    { id: "monitor",  label: "Monitor",   icon: <Zap className="h-3.5 w-3.5" /> },
+    { id: "sync",     label: "Sync",      icon: <RefreshCw className="h-3.5 w-3.5" /> },
+    { id: "webhooks", label: "Webhooks",  icon: <Webhook className="h-3.5 w-3.5" /> },
+    { id: "events",   label: "Events",    icon: <Telescope className="h-3.5 w-3.5" /> },
+    { id: "audit",    label: "Audit",     icon: <Terminal className="h-3.5 w-3.5" /> },
   ];
 
   return (
@@ -1110,13 +1645,13 @@ function EnterpriseDetail({ intg, onBack, onRefresh }: { intg: Integration; onBa
               <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Integration Details</h3>
               <div className="grid grid-cols-2 gap-y-3 gap-x-8 text-sm">
                 {([
-                  ["API Key", <span className="font-mono text-xs">{intg.website_api_key?.slice(0, 8)}••••••••</span>],
+                  ["API Key", <span key="ak" className="font-mono text-xs">{intg.website_api_key?.slice(0, 8)}••••••••</span>],
                   ["Platform", intg.platform || "custom"],
                   ["Detected Version", intg.discovered_version || "—"],
                   ["Created", new Date(intg.created_at).toLocaleDateString()],
-                  ["Auto Sync", intg.auto_sync_enabled ? "Enabled" : "Disabled"],
+                  ["Auto Sync", <AutoSyncToggle key="ast" intgId={intg.id} enabled={intg.auto_sync_enabled} onToggled={onRefresh} />],
                   ["Sync Interval", `${intg.sync_interval_min}s`],
-                  ["Status", <StatusPill status={intg.status} />],
+                  ["Status", <StatusPill key="sp" status={intg.status} />],
                   ["Consecutive Failures", String(intg.consecutive_sync_failures)],
                 ] as [string, ReactNode][]).map(([k, v], i) => (
                   <div key={i} className="flex justify-between border-b border-white/5 pb-2.5">
@@ -1129,13 +1664,14 @@ function EnterpriseDetail({ intg, onBack, onRefresh }: { intg: Integration; onBa
           </div>
         )}
 
-        {tab === "keys" && <ApiKeyManager />}
+        {tab === "keys"     && <ApiKeyManager />}
         {tab === "security" && <SecurityCenter />}
-        {tab === "health" && <HealthCenter integration={intg} />}
-        {tab === "monitor" && <RealtimeMonitor />}
-        {tab === "sync" && <SyncCenter integration={intg} onRefresh={onRefresh} />}
+        {tab === "health"   && <HealthCenter integration={intg} />}
+        {tab === "monitor"  && <RealtimeMonitor />}
+        {tab === "sync"     && <SyncCenter integration={intg} onRefresh={onRefresh} />}
         {tab === "webhooks" && <WebhookCenter integration={intg} />}
-        {tab === "audit" && <AuditCenter />}
+        {tab === "events"   && <EventInspector integration={intg} />}
+        {tab === "audit"    && <AuditCenter />}
       </div>
     </div>
   );
