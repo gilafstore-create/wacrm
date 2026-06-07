@@ -25,6 +25,69 @@ export function supabaseAdmin() {
   return _admin
 }
 
+// ── In-process auth metrics (for Render log monitoring) ───────────────────────
+let _authRequestCount = 0
+let _authRateLimitCount = 0
+
+export function getAuthMetrics() {
+  return { auth_request_count: _authRequestCount, auth_rate_limit_count: _authRateLimitCount }
+}
+
+// ── In-process API key cache (30s TTL) ───────────────────────────────────────
+// Caches successful API key validations to avoid repeated DB hits on every
+// scheduler tick (5000ms) or webhook burst. The service-role Supabase client
+// does NOT count against Auth rate limits, but DB query volume still matters.
+const _keyCache = new Map<string, { record: ApiKeyRecord; expiresAt: number }>()
+const KEY_CACHE_TTL_MS = 30_000  // 30 seconds
+
+function getCachedKey(apiKey: string): ApiKeyRecord | null {
+  const entry = _keyCache.get(apiKey)
+  if (!entry) return null
+  if (Date.now() > entry.expiresAt) {
+    _keyCache.delete(apiKey)
+    return null
+  }
+  return entry.record
+}
+
+function setCachedKey(apiKey: string, record: ApiKeyRecord): void {
+  _keyCache.set(apiKey, { record, expiresAt: Date.now() + KEY_CACHE_TTL_MS })
+}
+
+export function invalidateCachedKey(apiKey: string): void {
+  _keyCache.delete(apiKey)
+}
+
+// ── Exponential backoff retry for Supabase 429 / transient errors ─────────────
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxAttempts = 3,
+  baseDelayMs = 1_000,
+): Promise<T> {
+  let lastErr: unknown
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn()
+    } catch (err: unknown) {
+      lastErr = err
+      const is429 =
+        (err as { status?: number })?.status === 429 ||
+        (err as { code?: string })?.code === 'over_request_rate_limit'
+      if (is429) {
+        _authRateLimitCount++
+        console.warn(
+          `[auth-cache] Supabase rate limit hit (attempt ${attempt}/${maxAttempts}) — ` +
+          `backing off ${baseDelayMs * attempt}ms | total_429s=${_authRateLimitCount}`
+        )
+      }
+      if (attempt < maxAttempts) {
+        await new Promise(r => setTimeout(r, baseDelayMs * attempt))
+      }
+    }
+  }
+  throw lastErr
+}
+
 // ── Rate limit budgets for integration routes ─────────────────────────────────
 export const INTEGRATION_RATE_LIMITS = {
   health:       { limit: 120, windowMs: 60_000 },  // 120/min
@@ -68,59 +131,69 @@ export async function validateApiKey(
 ): Promise<{ record: ApiKeyRecord | null; error: string | null; rejectionReason?: string }> {
   if (!apiKey) return { record: null, error: 'Missing API key', rejectionReason: 'missing' }
 
-  const admin = supabaseAdmin()
-  
-  // 1. Try standard integration_keys (gcrm_...)
-  const { data, error } = await admin
-    .from('integration_keys')
-    .select('id, user_id, api_key, api_secret, is_bcrypt, is_active, revoked_at, expires_at, permissions')
-    .eq('api_key', apiKey)
-    .maybeSingle()
-
-  if (!error && data) {
-    // Check revoked
-    if (data.revoked_at) return { record: null, error: 'API key has been revoked', rejectionReason: 'revoked' }
-    // Check expired
-    if (data.expires_at && new Date(data.expires_at) < new Date()) {
-      return { record: null, error: 'API key has expired', rejectionReason: 'expired' }
-    }
-    // Check active
-    if (!data.is_active) return { record: null, error: 'API key is inactive', rejectionReason: 'inactive' }
-
-    // Update last_used_at (fire-and-forget)
-    void admin.from('integration_keys').update({ last_used_at: new Date().toISOString() }).eq('id', data.id)
-
-    return { record: data as ApiKeyRecord, error: null }
+  // ── Check in-process cache first ────────────────────────────────────────────────────
+  const cached = getCachedKey(apiKey)
+  if (cached) {
+    return { record: cached, error: null }
   }
 
-  // 2. Try website_integrations (gs_live_...)
-  if (apiKey.startsWith('gs_live_') || apiKey.startsWith('gs_test_')) {
-    const { data: webData, error: webError } = await admin
-      .from('website_integrations')
-      .select('id, user_id, website_api_key, website_secret, status')
-      .eq('website_api_key', apiKey)
+  _authRequestCount++
+
+  const admin = supabaseAdmin()
+
+  // ── 1. Try integration_keys (gcrm_... prefix) ──────────────────────────────────
+  const keyResult = await withRetry(() =>
+    admin
+      .from('integration_keys')
+      .select('id, user_id, api_key, api_secret, is_bcrypt, is_active, revoked_at, expires_at, permissions')
+      .eq('api_key', apiKey)
       .maybeSingle()
+  ) as { data: Record<string, unknown> | null; error: { message: string } | null }
+  const { data, error } = keyResult
+
+  if (!error && data) {
+    if (data.revoked_at) return { record: null, error: 'API key has been revoked', rejectionReason: 'revoked' }
+    if (data.expires_at && new Date(data.expires_at as string) < new Date()) {
+      return { record: null, error: 'API key has expired', rejectionReason: 'expired' }
+    }
+    if (!data.is_active) return { record: null, error: 'API key is inactive', rejectionReason: 'inactive' }
+
+    void admin.from('integration_keys').update({ last_used_at: new Date().toISOString() }).eq('id', data.id)
+
+    const record = data as unknown as ApiKeyRecord
+    setCachedKey(apiKey, record)
+    return { record, error: null }
+  }
+
+  // ── 2. Try website_integrations (gs_live_... / gsk_... prefix) ───────────────
+  if (apiKey.startsWith('gs_live_') || apiKey.startsWith('gs_test_') || apiKey.startsWith('gsk_')) {
+    const webResult = await withRetry(() =>
+      admin
+        .from('website_integrations')
+        .select('id, user_id, website_api_key, website_secret, status')
+        .eq('website_api_key', apiKey)
+        .maybeSingle()
+    ) as { data: Record<string, unknown> | null; error: { message: string } | null }
+    const { data: webData, error: webError } = webResult
 
     if (!webError && webData) {
       if (webData.status === 'disabled') return { record: null, error: 'Integration is disabled', rejectionReason: 'inactive' }
-      // Auto-promote pending/warning/error → active on first valid key usage
       if (webData.status !== 'active') {
         void admin.from('website_integrations').update({ status: 'active' }).eq('id', webData.id)
       }
-      return {
-        record: {
-          id: webData.id,
-          user_id: webData.user_id,
-          api_key: webData.website_api_key,
-          api_secret: webData.website_secret,
-          is_bcrypt: false,
-          is_active: true,
-          revoked_at: null,
-          expires_at: null,
-          permissions: ['*'],
-        } as ApiKeyRecord,
-        error: null,
+      const record: ApiKeyRecord = {
+        id:         webData.id as string,
+        user_id:    webData.user_id as string,
+        api_key:    webData.website_api_key as string,
+        api_secret: webData.website_secret as string,
+        is_bcrypt:  false,
+        is_active:  true,
+        revoked_at: null,
+        expires_at: null,
+        permissions: ['*'],
       }
+      setCachedKey(apiKey, record)
+      return { record, error: null }
     }
   }
 

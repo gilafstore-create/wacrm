@@ -20,6 +20,7 @@
  * caller and reschedules it atomically before any HTTP work begins.
  */
 import { syncAdminClient, runIntegrationSync, type IntegrationRow } from './sync-engine'
+import { getAuthMetrics } from '@/lib/integration/middleware'
 
 const TICK_MS = 5_000   // honor the 5s minimum interval
 const CLAIM_LIMIT = 25  // max integrations processed per tick
@@ -35,6 +36,8 @@ let _running = false   // re-entrancy guard: never overlap two ticks
 let _loopStarted = false
 let _loopTimer: ReturnType<typeof setInterval> | null = null
 let _lastTick: TickResult | null = null
+let _tickCount = 0
+let _consecutive429 = 0  // track 429 bursts for backoff
 
 export function getLastTick(): TickResult | null {
   return _lastTick
@@ -66,9 +69,35 @@ export async function tickScheduler(): Promise<TickResult> {
     const { data: due, error } = await admin.rpc('claim_due_website_syncs', { p_limit: CLAIM_LIMIT })
 
     if (error) {
-      console.error('[sync-scheduler] claim_due_website_syncs failed:', error.message)
+      // Detect Supabase 429 and back off
+      const is429 = error.message?.includes('rate') || (error as unknown as { status?: number }).status === 429
+      if (is429) {
+        _consecutive429++
+        const backoffMs = Math.min(_consecutive429 * 10_000, 60_000)
+        console.warn(
+          `[sync-scheduler] Supabase 429 on claim_due_website_syncs (burst #${_consecutive429}) — ` +
+          `backing off ${backoffMs}ms. Metrics: ${JSON.stringify(getAuthMetrics())}`
+        )
+        await new Promise(r => setTimeout(r, backoffMs))
+      } else {
+        console.error('[sync-scheduler] claim_due_website_syncs failed:', error.message)
+      }
       _lastTick = { claimed: 0, succeeded: 0, failed: 0, ranAt }
       return _lastTick
+    }
+
+    // Successful tick — reset 429 counter
+    _consecutive429 = 0
+
+    // Log auth metrics every 50 ticks (~4m30s at 5s intervals)
+    _tickCount++
+    if (_tickCount % 50 === 0) {
+      const metrics = getAuthMetrics()
+      console.log(
+        `[sync-scheduler] tick#${_tickCount} metrics: ` +
+        `auth_request_count=${metrics.auth_request_count} ` +
+        `auth_rate_limit_count=${metrics.auth_rate_limit_count}`
+      )
     }
 
     const rows = (due ?? []) as IntegrationRow[]

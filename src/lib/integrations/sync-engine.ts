@@ -117,8 +117,42 @@ export async function runIntegrationSync(
   let syncError: string | null = null
 
   try {
-    const base = intg.website_url
-    const apiKey = intg.website_api_key
+    const base = intg.website_url?.trim().replace(/\/$/, '')
+    const apiKey = intg.website_api_key?.trim()
+
+    // ── Pre-flight: abort immediately if key or URL is missing ──────────────────
+    // This prevents 'reason: missing' events in the GilafStore security log.
+    // The API key must be a non-empty string; an empty string means the
+    // integration was created without a key (or the DB row has a null value).
+    if (!apiKey) {
+      syncError = 'Integration is missing website_api_key — configure a valid API key in Integration settings'
+      console.error(
+        `[sync-engine] integration=${intg.id} url=${base ?? '(empty)'} ` +
+        `ABORT: website_api_key is missing or empty — cannot make authenticated requests to /api/crm/*. ` +
+        `Set the key in the Integrations dashboard.`
+      )
+      // Write a specific audit event so this shows up clearly in the Audit Center
+      await writeAudit(admin, {
+        userId:         intg.user_id,
+        actionType:     'sync_aborted_missing_key',
+        actionCategory: 'sync',
+        targetType:     'integration',
+        targetId:       intg.id,
+        targetName:     base ?? intg.website_url,
+        description:    'Sync aborted: website_api_key is missing. Configure a valid API key.',
+        success:        false,
+        errorMessage:   syncError,
+        endpoint:       `${base}/api/crm/*`,
+        tags:           ['missing_api_key', opts.syncType],
+      })
+      // Skip all fetch calls — fall through to sync log update
+      throw new Error(syncError)
+    }
+
+    if (!base) {
+      syncError = 'Integration is missing website_url — configure the website URL in Integration settings'
+      throw new Error(syncError)
+    }
 
     if (entityType === 'contacts' || entityType === 'all') {
       // Use last_sync_at for incremental sync — prevents historical data loss
