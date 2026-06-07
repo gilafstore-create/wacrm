@@ -16,6 +16,7 @@ import {
   applyRateLimit,
   checkWebhookReplay,
   logSecurityEvent,
+  logApiKeyEvent,
   getClientIP,
 } from '@/lib/integration/middleware'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
@@ -38,14 +39,20 @@ export async function POST(request: NextRequest) {
     if (limited) return limited
 
     // ── Step 2: Validate API key ──────────────────────────────────────────────
-    const { record: keyRecord, error: keyError } = await validateApiKey(apiKey)
+    const { record: keyRecord, error: keyError, rejectionReason } = await validateApiKey(apiKey)
     if (keyError || !keyRecord) {
-      await logSecurityEvent('invalid_api_key', 'high', {
+      await logApiKeyEvent('api_key_rejected', {
         ip, apiKeyPrefix: apiKey.substring(0, 8), route: 'webhook',
+        rejectionReason: rejectionReason ?? 'invalid',
         details: { error: keyError },
       })
-      return NextResponse.json({ error: keyError ?? 'Invalid API key' }, { status: 401 })
+      return NextResponse.json({ error: keyError ?? 'Invalid API key', reason: rejectionReason }, { status: 401 })
     }
+
+    // Log successful authentication for audit trail
+    void logApiKeyEvent('api_key_validated', {
+      userId: keyRecord.user_id, ip, apiKeyPrefix: apiKey.substring(0, 8), route: 'webhook',
+    })
 
     // ── Step 3: Read raw body for HMAC ────────────────────────────────────────
     const bodyText = await request.text()
@@ -140,6 +147,7 @@ export async function POST(request: NextRequest) {
 // ── Event dispatcher ──────────────────────────────────────────────────────────
 async function handleEvent(admin: any, event: string, data: any, ownerUserId: string) {
   switch (event) {
+    // ── Order events (dot notation from crm_hooks.php) ─────────────────────
     case 'order.placed':       return handleOrderPlaced(admin, data, ownerUserId)
     case 'order.confirmed':    return handleOrderStatusChange(admin, data, 'confirmed', ownerUserId)
     case 'order.packed':       return handleOrderStatusChange(admin, data, 'packed', ownerUserId)
@@ -153,6 +161,18 @@ async function handleEvent(admin: any, event: string, data: any, ownerUserId: st
     case 'customer.created':   return handleCustomerCreated(admin, data, ownerUserId)
     case 'customer.updated':   return handleCustomerUpdated(admin, data, ownerUserId)
     case 'customer.login':     return handleCustomerLogin(admin, data, ownerUserId)
+
+    // ── Trigger-engine events (trigger.* namespace from crm_trigger_engine.php)
+    //    These are fired by the enterprise trigger engine and use a different
+    //    naming convention from the dot-notation hooks above.
+    case 'trigger.order_created':   return handleTriggerOrderCreated(admin, data, ownerUserId)
+    case 'trigger.payment_success': return handleTriggerPaymentSuccess(admin, data, ownerUserId)
+
+    // ── Behavioural / marketing events ────────────────────────────────────
+    case 'contact.tag_added':  return handleContactTagAdded(admin, data, ownerUserId)
+    case 'product.viewed':     return handleProductViewed(admin, data, ownerUserId)
+    case 'checkout.started':   return handleCheckoutStarted(admin, data, ownerUserId)
+
     default:
       console.log(`[integration/webhook] Unknown event: ${event}`)
       return { success: true, message: `Event '${event}' acknowledged but not handled` }
@@ -288,6 +308,184 @@ async function handleCustomerLogin(admin: any, data: any, ownerUserId: string) {
   if (!contact) return { success: true, message: 'Contact not found' }
   await admin.from('contacts').update({ last_contacted_at: new Date().toISOString() }).eq('id', contact.id)
   return { success: true, contact_id: contact.id }
+}
+
+// ── New handlers for previously-unknown events ─────────────────────────────────
+
+/**
+ * trigger.order_created — fired by crm_trigger_engine.php when an order is placed.
+ * Creates a CRM order record and upserts the contact, then fires order_created automation.
+ */
+async function handleTriggerOrderCreated(admin: any, data: any, ownerUserId: string) {
+  const { order_id, user_id, total, payment_method, customer_name, phone, email } = data
+
+  // 1. Upsert the contact
+  const contact = await findOrCreateContact(
+    admin,
+    { name: customer_name, phone, email, local_user_id: user_id },
+    ownerUserId,
+  )
+  if (!contact) return { success: false, error: 'Failed to create/find contact' }
+
+  // 2. Persist a CRM order record so the contact has a full purchase history
+  const { error: orderErr } = await admin.from('crm_orders').upsert({
+    user_id:     ownerUserId,
+    contact_id:  contact.id,
+    external_id: String(order_id),
+    total_amount: parseFloat(String(total ?? 0)),
+    currency:    'INR',
+    status:      'pending',
+    payment_method: payment_method ?? null,
+    ordered_at:  new Date().toISOString(),
+  }, { onConflict: 'user_id,external_id', ignoreDuplicates: false })
+
+  if (orderErr) {
+    console.warn('[integration/webhook] crm_orders upsert skipped (table may not exist):', orderErr.message)
+  }
+
+  // 3. Add a contact note
+  await admin.from('contact_notes').insert({
+    contact_id: contact.id,
+    user_id:    ownerUserId,
+    content:    `🛍️ [Trigger] Order #${order_id} created — ₹${total} via ${payment_method ?? 'unknown'}`,
+    type:       'system',
+  })
+
+  // 4. Revenue attribution
+  if (total && parseFloat(String(total)) > 0) {
+    void admin.from('integration_revenue_events').insert({
+      user_id:      ownerUserId,
+      contact_id:   contact.id,
+      order_id:     String(order_id),
+      revenue:      parseFloat(String(total)),
+      currency:     'INR',
+      attributed_to: 'organic',
+      phone,
+    })
+  }
+
+  // 5. Tag and automate
+  await ensureTag(admin, contact, 'customer')
+  await triggerAutomation(admin, contact, 'order_created', data)
+
+  return { success: true, contact_id: contact.id, order_id, message: 'Trigger order_created processed' }
+}
+
+/**
+ * trigger.payment_success — fired by crm_trigger_engine.php after a payment is confirmed.
+ * Updates the order's payment status in CRM and tags the contact 'paid'.
+ */
+async function handleTriggerPaymentSuccess(admin: any, data: any, ownerUserId: string) {
+  const { order_id, user_id, amount, method, phone } = data
+
+  const contact = await findOrCreateContact(
+    admin,
+    { phone, local_user_id: user_id },
+    ownerUserId,
+  )
+  if (!contact) return { success: true, message: 'Contact not found, payment logged only' }
+
+  // Update CRM order payment status
+  const { error: updateErr } = await admin.from('crm_orders')
+    .update({ status: 'paid', payment_method: method ?? null, paid_at: new Date().toISOString() })
+    .eq('user_id', ownerUserId)
+    .eq('external_id', String(order_id))
+
+  if (updateErr) {
+    console.warn('[integration/webhook] crm_orders payment update skipped:', updateErr.message)
+  }
+
+  // Contact note
+  await admin.from('contact_notes').insert({
+    contact_id: contact.id,
+    user_id:    ownerUserId,
+    content:    `💳 [Trigger] Payment ₹${amount} received for order #${order_id} via ${method ?? 'unknown'}`,
+    type:       'system',
+  })
+
+  await ensureTag(admin, contact, 'paid')
+  await triggerAutomation(admin, contact, 'payment_success', data)
+
+  return { success: true, contact_id: contact.id, message: 'Trigger payment_success processed' }
+}
+
+/**
+ * contact.tag_added — fired by crm_trigger_engine.php when a tag is added to a contact.
+ * Propagates the tag into WACRM contact_tags and fires any tag-based automations.
+ */
+async function handleContactTagAdded(admin: any, data: any, ownerUserId: string) {
+  const { user_id, tag } = data
+  if (!tag) return { success: true, message: 'No tag provided' }
+
+  const contact = await findOrCreateContact(
+    admin,
+    { local_user_id: user_id },
+    ownerUserId,
+  )
+  if (!contact) return { success: true, message: 'Contact not found' }
+
+  await ensureTag(admin, contact, String(tag))
+  await triggerAutomation(admin, contact, 'contact_tag_added', { ...data, tag_name: tag })
+
+  return { success: true, contact_id: contact.id, tag, message: 'Tag synced to CRM contact' }
+}
+
+/**
+ * product.viewed — behavioural event fired from product.php.
+ * Records the view in a product_views table and can trigger browse-abandon automations.
+ */
+async function handleProductViewed(admin: any, data: any, ownerUserId: string) {
+  const { product_id, user_id, phone } = data
+
+  // Record the view event (table may not exist on all deployments — soft fail)
+  const { error: viewErr } = await admin.from('contact_product_views').insert({
+    user_id:    ownerUserId,
+    contact_id: null,   // will be enriched below if user is known
+    product_id: String(product_id ?? ''),
+    external_user_id: user_id ? String(user_id) : null,
+    viewed_at:  new Date().toISOString(),
+  })
+  if (viewErr) {
+    console.info('[integration/webhook] contact_product_views insert skipped (table may not exist):', viewErr.message)
+  }
+
+  // If user is known, update the contact record
+  if (user_id || phone) {
+    const contact = await findOrCreateContact(admin, { phone, local_user_id: user_id }, ownerUserId)
+    if (contact) {
+      await admin.from('contacts').update({ last_contacted_at: new Date().toISOString() }).eq('id', contact.id)
+      return { success: true, contact_id: contact.id, message: 'Product view tracked' }
+    }
+  }
+
+  return { success: true, message: 'Product view logged (anonymous)' }
+}
+
+/**
+ * checkout.started — fired from checkout.php when a user begins checkout.
+ * Marks the contact as a hot lead and triggers cart-abandonment automations if they don't complete.
+ */
+async function handleCheckoutStarted(admin: any, data: any, ownerUserId: string) {
+  const { user_id, total, item_count, phone } = data
+
+  const contact = await findOrCreateContact(
+    admin,
+    { phone, local_user_id: user_id },
+    ownerUserId,
+  )
+  if (!contact) return { success: true, message: 'Contact not found (anonymous checkout)' }
+
+  await admin.from('contact_notes').insert({
+    contact_id: contact.id,
+    user_id:    ownerUserId,
+    content:    `🛒 Checkout started — ₹${total} (${item_count} items)`,
+    type:       'system',
+  })
+
+  await ensureTag(admin, contact, 'checkout-started')
+  await triggerAutomation(admin, contact, 'checkout_started', data)
+
+  return { success: true, contact_id: contact.id, message: 'Checkout start tracked' }
 }
 
 // ── Helper: find contact by phone (user scoped) ───────────────────────────────

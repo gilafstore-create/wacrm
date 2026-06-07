@@ -65,8 +65,8 @@ export interface ApiKeyRecord {
 
 export async function validateApiKey(
   apiKey: string,
-): Promise<{ record: ApiKeyRecord | null; error: string | null }> {
-  if (!apiKey) return { record: null, error: 'Missing API key' }
+): Promise<{ record: ApiKeyRecord | null; error: string | null; rejectionReason?: string }> {
+  if (!apiKey) return { record: null, error: 'Missing API key', rejectionReason: 'missing' }
 
   const admin = supabaseAdmin()
   
@@ -79,13 +79,13 @@ export async function validateApiKey(
 
   if (!error && data) {
     // Check revoked
-    if (data.revoked_at) return { record: null, error: 'API key has been revoked' }
+    if (data.revoked_at) return { record: null, error: 'API key has been revoked', rejectionReason: 'revoked' }
     // Check expired
     if (data.expires_at && new Date(data.expires_at) < new Date()) {
-      return { record: null, error: 'API key has expired' }
+      return { record: null, error: 'API key has expired', rejectionReason: 'expired' }
     }
     // Check active
-    if (!data.is_active) return { record: null, error: 'API key is inactive' }
+    if (!data.is_active) return { record: null, error: 'API key is inactive', rejectionReason: 'inactive' }
 
     // Update last_used_at (fire-and-forget)
     void admin.from('integration_keys').update({ last_used_at: new Date().toISOString() }).eq('id', data.id)
@@ -102,7 +102,7 @@ export async function validateApiKey(
       .maybeSingle()
 
     if (!webError && webData) {
-      if (webData.status === 'disabled') return { record: null, error: 'Integration is disabled' }
+      if (webData.status === 'disabled') return { record: null, error: 'Integration is disabled', rejectionReason: 'inactive' }
       // Auto-promote pending/warning/error → active on first valid key usage
       if (webData.status !== 'active') {
         void admin.from('website_integrations').update({ status: 'active' }).eq('id', webData.id)
@@ -124,7 +124,7 @@ export async function validateApiKey(
     }
   }
 
-  return { record: null, error: 'Invalid API key' }
+  return { record: null, error: 'Invalid API key', rejectionReason: 'invalid' }
 }
 
 // ── Apply rate limit for a route ──────────────────────────────────────────────
@@ -179,7 +179,7 @@ async function logRateLimit(userId: string | undefined, apiKey: string, ip: stri
   } catch { /* non-blocking */ }
 }
 
-// ── Log security event ────────────────────────────────────────────────────────
+// ── Log security event ─────────────────────────────────────────────────────────────────
 export async function logSecurityEvent(
   eventType: string,
   severity: 'low' | 'medium' | 'high' | 'critical',
@@ -194,6 +194,35 @@ export async function logSecurityEvent(
       api_key_prefix: opts.apiKeyPrefix ?? null,
       route: opts.route ?? null,
       details: opts.details ?? {},
+    })
+  } catch { /* non-blocking */ }
+}
+
+// ── Log API key validation event (audit trail) ────────────────────────────────────────
+export async function logApiKeyEvent(
+  eventType: 'api_key_validated' | 'api_key_rejected',
+  opts: {
+    userId?: string
+    ip?: string
+    apiKeyPrefix?: string
+    route?: string
+    rejectionReason?: string
+    details?: Record<string, unknown>
+  },
+) {
+  try {
+    const severity = eventType === 'api_key_validated' ? 'low' : 'medium'
+    await supabaseAdmin().from('security_events').insert({
+      user_id:         opts.userId ?? null,
+      event_type:      eventType,
+      severity,
+      ip_address:      opts.ip ?? null,
+      api_key_prefix:  opts.apiKeyPrefix ?? null,
+      route:           opts.route ?? null,
+      details: {
+        ...(opts.details ?? {}),
+        ...(opts.rejectionReason ? { rejection_reason: opts.rejectionReason } : {}),
+      },
     })
   } catch { /* non-blocking */ }
 }
