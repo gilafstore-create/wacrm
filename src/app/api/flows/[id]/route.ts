@@ -36,11 +36,22 @@ async function requireOwnership(
   }
   // RLS scopes this to the caller — a flow owned by another user
   // returns null (404 below).
-  const { data: flow } = await supabase
+  const { data: flow, error } = await supabase
     .from('flows')
     .select('id')
     .eq('id', flowId)
     .maybeSingle()
+  // A real DB/permission error must NOT be silently swallowed as a 404 —
+  // doing so previously masked a missing table GRANT and surfaced as a
+  // bogus "Flow not found". Surface it as a 500 with the exact message.
+  if (error) {
+    console.error('[flows/:id] ownership query failed:', error)
+    return {
+      ok: false,
+      status: 500,
+      body: { error: `Flow lookup failed: ${error.message}` },
+    }
+  }
   if (!flow) {
     return { ok: false, status: 404, body: { error: 'Not found' } }
   }
@@ -52,31 +63,29 @@ export async function GET(
   context: { params: Promise<{ id: string }> },
 ) {
   const { id } = await context.params
-  console.log('[GET /api/flows/:id] Fetching flow:', id)
-  
   const guard = await requireOwnership(id)
-  console.log('[GET /api/flows/:id] Ownership check:', { ok: guard.ok, status: guard.ok ? 'authorized' : guard.status })
-  
   if (!guard.ok) return NextResponse.json(guard.body, { status: guard.status })
-  const { supabase, userId } = guard
+  const { supabase } = guard
 
-  const [{ data: flow }, { data: nodes }] = await Promise.all([
-    supabase.from('flows').select('*').eq('id', id).maybeSingle(),
-    supabase
-      .from('flow_nodes')
-      .select('*')
-      .eq('flow_id', id)
-      .order('created_at', { ascending: true }),
-  ])
-  
-  console.log('[GET /api/flows/:id] Query result:', { 
-    flowFound: !!flow, 
-    nodeCount: nodes?.length ?? 0,
-    userId 
-  })
-  
+  const [{ data: flow, error: flowErr }, { data: nodes, error: nodesErr }] =
+    await Promise.all([
+      supabase.from('flows').select('*').eq('id', id).maybeSingle(),
+      supabase
+        .from('flow_nodes')
+        .select('*')
+        .eq('flow_id', id)
+        .order('created_at', { ascending: true }),
+    ])
+
+  // Surface real query errors instead of masking them as a 404.
+  if (flowErr || nodesErr) {
+    console.error('[flows/:id] GET query failed:', flowErr ?? nodesErr)
+    return NextResponse.json(
+      { error: (flowErr ?? nodesErr)!.message },
+      { status: 500 },
+    )
+  }
   if (!flow) {
-    console.error('[GET /api/flows/:id] Flow not found:', id)
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
   return NextResponse.json({ flow, nodes: nodes ?? [] })

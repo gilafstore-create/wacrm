@@ -124,7 +124,7 @@ export async function runIntegrationSync(
       const sinceParam = intg.last_sync_at
         ? `&since=${encodeURIComponent(intg.last_sync_at)}`
         : ''
-      const res = await fetch(`${base}/api/integration/sync-customer?limit=500${sinceParam}`, {
+      const res = await fetch(`${base}/api/crm/customers?limit=500${sinceParam}`, {
         headers: { 'X-GilafStore-Key': apiKey, 'Accept': 'application/json' },
         signal: AbortSignal.timeout(30_000),
       }).catch(() => null)
@@ -150,7 +150,7 @@ export async function runIntegrationSync(
           }
         }
       } else if (res) {
-        syncError = `Website returned HTTP ${res.status} from /api/integration/sync-customer`
+        syncError = `Website returned HTTP ${res.status} from /api/crm/customers`
       } else {
         syncError = 'Website unreachable (request failed or timed out)'
       }

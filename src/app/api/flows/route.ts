@@ -141,22 +141,13 @@ export async function POST(request: Request) {
     })
     .select()
     .single()
-  
-  console.log('[POST /api/flows] Insert result:', { 
-    userId, 
-    flowId: data?.id, 
-    error: error?.message,
-    success: !!data 
-  })
-  
+
   if (error || !data) {
-    console.error('[POST /api/flows] Insert failed:', error)
+    console.error('[POST /api/flows] insert failed:', error)
     return NextResponse.json(
       { error: error?.message ?? 'insert failed' },
       { status: 500 },
     )
   }
-  
-  console.log('[POST /api/flows] Flow created successfully:', data.id)
   return NextResponse.json({ flow: data }, { status: 201 })
 }
