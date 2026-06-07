@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
+import { writeAudit } from '@/lib/integrations/audit'
 
 function adminClient() {
   return createClient(
@@ -93,6 +94,19 @@ export async function POST(request: NextRequest) {
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
+
+  // Audit log
+  await writeAudit(admin, {
+    userId:         user.id,
+    actionType:     'ip_blacklisted',
+    actionCategory: 'security',
+    targetType:     'ip_address',
+    targetId:       data.id,
+    targetName:     ip_address || ip_range,
+    description:    `IP ${ip_address || ip_range} added to blacklist. Reason: ${reason}`,
+    endpoint:       '/api/security/ip-blacklist',
+    method:         'POST',
+  })
 
   return NextResponse.json({
     success: true,
