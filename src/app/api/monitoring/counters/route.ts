@@ -33,13 +33,15 @@ export async function GET(request: NextRequest) {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
 
-  // Requests today
+  // Requests today: count incoming webhooks received from all user's integrations
   const { count: requestsToday } = await admin
-    .from('api_key_usage_logs')
+    .from('integration_webhook_logs')
     .select('*', { count: 'exact', head: true })
+    .eq('user_id', user.id)
+    .eq('direction', 'incoming')
     .gte('created_at', today.toISOString())
 
-  // Contacts synced today
+  // Contacts & orders synced (lifetime totals from all integrations)
   const { data: integrations } = await admin
     .from('website_integrations')
     .select('total_synced_contacts, total_synced_orders')
@@ -48,23 +50,26 @@ export async function GET(request: NextRequest) {
   const totalContacts = integrations?.reduce((sum, i) => sum + (i.total_synced_contacts || 0), 0) || 0
   const totalOrders = integrations?.reduce((sum, i) => sum + (i.total_synced_orders || 0), 0) || 0
 
-  // Failed syncs today
+  // Failed syncs today — scoped to user's integrations
   const { count: failedSyncs } = await admin
     .from('website_sync_log')
     .select('*', { count: 'exact', head: true })
+    .eq('user_id', user.id)
     .eq('status', 'failed')
     .gte('created_at', today.toISOString())
 
-  // Queue size (pending webhook deliveries)
+  // Queue size: incoming webhook logs not yet processed (status = 'received')
   const { count: queueSize } = await admin
-    .from('website_webhook_deliveries')
+    .from('integration_webhook_logs')
     .select('*', { count: 'exact', head: true })
-    .eq('status', 'pending')
+    .eq('user_id', user.id)
+    .eq('status', 'received')
 
-  // Webhook events today
+  // Webhook events today: all outgoing deliveries for user's integrations
   const { count: webhookEvents } = await admin
     .from('website_webhook_deliveries')
     .select('*', { count: 'exact', head: true })
+    .eq('user_id', user.id)
     .gte('created_at', today.toISOString())
 
   return NextResponse.json({

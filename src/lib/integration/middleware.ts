@@ -102,7 +102,11 @@ export async function validateApiKey(
       .maybeSingle()
 
     if (!webError && webData) {
-      if (webData.status !== 'active') return { record: null, error: 'Integration is inactive' }
+      if (webData.status === 'disabled') return { record: null, error: 'Integration is disabled' }
+      // Auto-promote pending/warning/error → active on first valid key usage
+      if (webData.status !== 'active') {
+        void admin.from('website_integrations').update({ status: 'active' }).eq('id', webData.id)
+      }
       return {
         record: {
           id: webData.id,

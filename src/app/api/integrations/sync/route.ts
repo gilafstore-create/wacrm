@@ -118,6 +118,21 @@ export async function POST(request: NextRequest) {
       error_message: result.error,
     }).eq('id', delivery_id)
 
+    // Update integration-level counters so Overview/WebhookCenter reflect real totals
+    const integId = (delivery as Record<string, unknown>).integration_id as string
+    if (integId) {
+      const { data: cur } = await admin
+        .from('website_integrations')
+        .select('total_webhooks_sent, total_webhooks_failed')
+        .eq('id', integId).eq('user_id', user.id).maybeSingle()
+      if (cur) {
+        await admin.from('website_integrations').update({
+          total_webhooks_sent:   (cur.total_webhooks_sent ?? 0) + 1,
+          ...(result.ok ? {} : { total_webhooks_failed: (cur.total_webhooks_failed ?? 0) + 1 }),
+        }).eq('id', integId)
+      }
+    }
+
     return NextResponse.json({ success: result.ok, result })
   }
 

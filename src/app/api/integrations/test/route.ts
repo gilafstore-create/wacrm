@@ -284,7 +284,7 @@ export async function POST(request: NextRequest) {
 
   let overallStatus: 'active' | 'warning' | 'error' = 'error'
   if (healthScore >= 60) overallStatus = 'active'
-  else if (healthScore >= 20 && siteReachable) overallStatus = 'warning'
+  else if (siteReachable) overallStatus = 'warning'  // never 'error' when reachable — would break API key auth
 
   // ── 6. Generate human-readable recommendation ─────────────────────────────────
   let recommendation: string
