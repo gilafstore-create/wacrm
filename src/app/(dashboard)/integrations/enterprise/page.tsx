@@ -1822,9 +1822,9 @@ function CredentialsModal({ data, onDone }: { data: Record<string, unknown>; onD
   const [copied, setCopied] = useState<string | null>(null);
 
   const fields = [
-    { label: "Connection Token", key: "connection_token" },
-    { label: "Website Secret",   key: "website_secret"   },
-    { label: "Webhook Secret",   key: "webhook_secret"   },
+    { label: "WACRM API Key",                    key: "connection_token" },
+    { label: "Signing Secret (outbound HMAC)",   key: "website_secret"   },
+    { label: "Inbound Secret (verify WACRM→us)", key: "webhook_secret"   },
   ];
 
   const handleCopy = (key: string) => {
@@ -1889,7 +1889,7 @@ function CredentialsModal({ data, onDone }: { data: Record<string, unknown>; onD
         </button>
 
         <div className="mt-4 rounded-lg border border-slate-700 bg-slate-900/60 p-3 text-xs text-slate-400">
-          <strong className="text-slate-300">Setup:</strong> Go to your website Admin → WhatsApp CRM Integration → paste the Connection Token only.
+          <strong className="text-slate-300">Setup:</strong> Go to <strong className="text-slate-200">gilafstore.com/admin/ce_wacrm_test.php</strong> → Step 1 → paste each value into its matching field: <em>WACRM API Key</em>, <em>Signing Secret</em>, <em>Inbound Secret</em> → Save Config.
         </div>
         <button onClick={onDone} className="mt-4 w-full rounded-lg bg-emerald-600 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500">
           ✓ I&apos;ve saved my credentials — Continue
