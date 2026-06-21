@@ -305,18 +305,40 @@ function ApiKeyManager() {
     loadKeys();
   };
 
+  const deleteKey = async (id: string) => {
+    if (!confirm("DELETE this API key permanently?\n\nThis action cannot be undone. The key will be completely removed.")) return;
+    await fetch(`/api/api-keys/${id}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: "Permanently deleted by user" }) });
+    loadKeys();
+  };
+
   const disableKey = async (id: string, disabled: boolean) => {
     await fetch(`/api/api-keys/${id}/${disabled ? "enable" : "disable"}`, { method: "POST" });
     loadKeys();
   };
 
+  const revealKey = async (id: string) => {
+    // Try to reveal the full key from the linked integration (no rotation needed)
+    const r = await fetch(`/api/api-keys/${id}/reveal`, { method: "POST" });
+    const d = await r.json();
+    if (r.ok && d.full_key) {
+      navigator.clipboard.writeText(d.full_key).then(() => {
+        setCopiedId(id);
+        setTimeout(() => setCopiedId(null), 3000);
+      });
+      setNewKey({ ...keys.find(k => k.id === id)!, full_key: d.full_key });
+    } else {
+      // Fallback: rotate to get a new key
+      if (confirm("Full key not available (stored as hash only).\n\nRotate to generate a new key? The old key will stop working.")) {
+        rotateKey(id);
+      }
+    }
+  };
+
   const rotateKey = async (id: string) => {
-    if (!confirm("Rotate this API key? The old key will stop working immediately.\n\nA new key will be generated and shown once — copy it immediately.")) return;
     const r = await fetch(`/api/api-keys/${id}/rotate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: "Manual rotation" }) });
     const d = await r.json();
     if (r.ok) {
       setNewKey(d);
-      // Auto-copy the full key to clipboard
       if (d.full_key) {
         navigator.clipboard.writeText(d.full_key).then(() => {
           setCopiedId(id);
@@ -479,20 +501,27 @@ function ApiKeyManager() {
                     <div className="text-xs text-slate-600">{key.rate_limit_per_minute} req/min</div>
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex items-center gap-1">
                       <button
-                        onClick={() => rotateKey(key.id)}
-                        title="Reveal full key (generates new key)"
+                        onClick={() => revealKey(key.id)}
+                        title="Reveal & copy full API key"
                         className="rounded p-1.5 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
                       >
                         <Eye className="h-3.5 w-3.5" />
                       </button>
                       <button
-                        onClick={() => rotateKey(key.id)}
-                        title="Copy full key (generates new key)"
+                        onClick={() => revealKey(key.id)}
+                        title="Copy full API key to clipboard"
                         className="rounded p-1.5 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
                       >
                         {copiedId === key.id ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                      </button>
+                      <button
+                        onClick={() => rotateKey(key.id)}
+                        title="Rotate key (generate new key)"
+                        className="rounded p-1.5 hover:bg-slate-700 text-slate-400 hover:text-amber-400 transition-colors"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
                       </button>
                       <button
                         onClick={() => disableKey(key.id, key.status === "disabled")}
@@ -502,11 +531,11 @@ function ApiKeyManager() {
                         {key.status === "disabled" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" /> : <EyeOff className="h-3.5 w-3.5" />}
                       </button>
                       <button
-                        onClick={() => revokeKey(key.id)}
-                        title="Revoke key"
+                        onClick={() => deleteKey(key.id)}
+                        title="Delete key permanently"
                         className="rounded p-1.5 hover:bg-red-900/30 text-slate-400 hover:text-red-400 transition-colors"
                       >
-                        <X className="h-3.5 w-3.5" />
+                        <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     </div>
                   </td>
