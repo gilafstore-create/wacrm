@@ -309,10 +309,19 @@ function ApiKeyManager() {
   };
 
   const rotateKey = async (id: string) => {
-    if (!confirm("Rotate this API key? The old key will stop working immediately.")) return;
+    if (!confirm("Rotate this API key? The old key will stop working immediately.\n\nA new key will be generated and shown once — copy it immediately.")) return;
     const r = await fetch(`/api/api-keys/${id}/rotate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: "Manual rotation" }) });
     const d = await r.json();
-    if (r.ok) setNewKey(d);
+    if (r.ok) {
+      setNewKey(d);
+      // Auto-copy the full key to clipboard
+      if (d.full_key) {
+        navigator.clipboard.writeText(d.full_key).then(() => {
+          setCopiedId(id);
+          setTimeout(() => setCopiedId(null), 3000);
+        });
+      }
+    }
     loadKeys();
   };
 
@@ -470,18 +479,18 @@ function ApiKeyManager() {
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button
-                        onClick={() => handleCopy(key.key_prefix + "•••", key.id)}
-                        title="Copy prefix"
+                        onClick={() => rotateKey(key.id)}
+                        title="Reveal full key (generates new key)"
                         className="rounded p-1.5 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
                       >
-                        {copiedId === key.id ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                        <Eye className="h-3.5 w-3.5" />
                       </button>
                       <button
                         onClick={() => rotateKey(key.id)}
-                        title="Rotate key"
+                        title="Copy full key (generates new key)"
                         className="rounded p-1.5 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
                       >
-                        <RotateCcw className="h-3.5 w-3.5" />
+                        {copiedId === key.id ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
                       </button>
                       <button
                         onClick={() => disableKey(key.id, key.status === "disabled")}
