@@ -299,25 +299,49 @@ function ApiKeyManager() {
     setCreating(false);
   };
 
-  const revokeKey = async (id: string) => {
-    if (!confirm("Revoke this API key? This cannot be undone.")) return;
-    await fetch(`/api/api-keys/${id}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: "Manually revoked" }) });
-    loadKeys();
-  };
-
   const deleteKey = async (id: string) => {
-    if (!confirm("DELETE this API key permanently?\n\nThis action cannot be undone. The key will be completely removed.")) return;
-    await fetch(`/api/api-keys/${id}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: "Permanently deleted by user" }) });
+    if (!confirm("Delete this API key permanently?\n\nThis cannot be undone.")) return;
+    const r = await fetch(`/api/api-keys/${id}`, { method: "DELETE" });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      alert("Delete failed: " + (d.error || r.status));
+      return;
+    }
     loadKeys();
   };
 
   const disableKey = async (id: string, disabled: boolean) => {
-    await fetch(`/api/api-keys/${id}/${disabled ? "enable" : "disable"}`, { method: "POST" });
+    const r = await fetch(`/api/api-keys/${id}/${disabled ? "enable" : "disable"}`, { method: "POST" });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      alert("Failed: " + (d.error || r.status));
+      return;
+    }
+    loadKeys();
+  };
+
+  const rotateKey = async (id: string) => {
+    if (!confirm("Generate a NEW API key?\n\nThe current key will stop working immediately. Copy the new key right away.")) return;
+    const r = await fetch(`/api/api-keys/${id}/rotate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: "Manual rotation" }),
+    });
+    const d = await r.json();
+    if (r.ok && d.full_key) {
+      setNewKey(d);
+      navigator.clipboard.writeText(d.full_key).then(() => {
+        setCopiedId(id);
+        setTimeout(() => setCopiedId(null), 3000);
+      });
+    } else {
+      alert("Rotate failed: " + (d.error || r.status));
+    }
     loadKeys();
   };
 
   const revealKey = async (id: string) => {
-    // Try to reveal the full key from the linked integration (no rotation needed)
+    // Try to get the full key from the linked integration (no rotation)
     const r = await fetch(`/api/api-keys/${id}/reveal`, { method: "POST" });
     const d = await r.json();
     if (r.ok && d.full_key) {
@@ -327,26 +351,9 @@ function ApiKeyManager() {
       });
       setNewKey({ ...keys.find(k => k.id === id)!, full_key: d.full_key });
     } else {
-      // Fallback: rotate to get a new key
-      if (confirm("Full key not available (stored as hash only).\n\nRotate to generate a new key? The old key will stop working.")) {
-        rotateKey(id);
-      }
+      // Standalone key — full key not stored, must rotate
+      rotateKey(id);
     }
-  };
-
-  const rotateKey = async (id: string) => {
-    const r = await fetch(`/api/api-keys/${id}/rotate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: "Manual rotation" }) });
-    const d = await r.json();
-    if (r.ok) {
-      setNewKey(d);
-      if (d.full_key) {
-        navigator.clipboard.writeText(d.full_key).then(() => {
-          setCopiedId(id);
-          setTimeout(() => setCopiedId(null), 3000);
-        });
-      }
-    }
-    loadKeys();
   };
 
   const handleCopy = (text: string, id: string) => {

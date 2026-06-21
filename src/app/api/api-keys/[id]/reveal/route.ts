@@ -36,10 +36,10 @@ export async function POST(
   const { id } = await params
   const admin = adminClient()
 
-  // Get the api_key record
+  // Get the api_key record — we need key_prefix to match against integration keys
   const { data: apiKey } = await admin
     .from('api_keys')
-    .select('id, integration_id, user_id')
+    .select('id, key_prefix, user_id')
     .eq('id', id)
     .eq('user_id', user.id)
     .maybeSingle()
@@ -48,23 +48,25 @@ export async function POST(
     return NextResponse.json({ error: 'API key not found' }, { status: 404 })
   }
 
-  // If linked to an integration, fetch the raw key from website_integrations
-  if (apiKey.integration_id) {
-    const { data: intg } = await admin
+  // Match by key_prefix: find integration where website_api_key starts with this prefix
+  // key_prefix is like "gilaf_84a8bc4c" and website_api_key starts with "gilaf_84a8bc4c_..."
+  if (apiKey.key_prefix) {
+    const { data: integrations } = await admin
       .from('website_integrations')
       .select('website_api_key')
-      .eq('id', apiKey.integration_id)
       .eq('user_id', user.id)
-      .maybeSingle()
+      .like('website_api_key', `${apiKey.key_prefix}%`)
+      .limit(1)
 
-    if (intg?.website_api_key) {
-      return NextResponse.json({ full_key: intg.website_api_key })
+    const fullKey = integrations?.[0]?.website_api_key
+    if (fullKey) {
+      return NextResponse.json({ full_key: fullKey })
     }
   }
 
-  // For non-integration keys, the full key is not stored (only hash)
+  // Full key not stored — caller will offer rotate as fallback
   return NextResponse.json(
-    { error: 'Full key cannot be revealed for this key type. Use Rotate to generate a new one.' },
+    { error: 'Full key not available. Use Rotate to generate a new one.' },
     { status: 400 }
   )
 }

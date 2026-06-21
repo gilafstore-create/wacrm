@@ -108,7 +108,7 @@ export async function PUT(
   return NextResponse.json(data)
 }
 
-// DELETE /api/api-keys/:id - Revoke API key
+// DELETE /api/api-keys/:id - Permanently delete API key
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -117,34 +117,17 @@ export async function DELETE(
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { id } = await params
-  const body = await request.json()
-  const reason = body.reason || 'User requested revocation'
 
   const admin = adminClient()
-  const { data, error } = await admin
+  const { error } = await admin
     .from('api_keys')
-    .update({
-      status: 'revoked',
-      revoked_at: new Date().toISOString(),
-      revoked_by: user.email || 'system',
-      revoked_reason: reason,
-      updated_at: new Date().toISOString(),
-    })
+    .delete()
     .eq('id', id)
     .eq('user_id', user.id)
-    .select()
-    .single()
 
   if (error) {
-    if (error.code === 'PGRST116') {
-      return NextResponse.json({ error: 'API key not found' }, { status: 404 })
-    }
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  return NextResponse.json({
-    success: true,
-    message: 'API key revoked successfully',
-    key: data,
-  })
+  return NextResponse.json({ success: true, message: 'API key deleted permanently' })
 }

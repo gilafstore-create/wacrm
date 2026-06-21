@@ -33,8 +33,6 @@ export async function POST(
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { id } = await params
-  const body = await request.json()
-  const reason = body.reason || 'Key disabled by user'
 
   const admin = adminClient()
   const { data, error } = await admin
