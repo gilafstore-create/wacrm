@@ -68,32 +68,30 @@ export async function POST(
   // Generate new key
   const fullKey = generateApiKey()
   const keyHash = hashApiKey(fullKey)
-  const keyPrefix = fullKey.split('_')[0] + '_' + fullKey.split('_')[1]?.slice(0, 8)
+  const keyPrefix = fullKey.split('_')[0] + '_' + (fullKey.split('_')[1]?.slice(0, 8) ?? '')
+  const now = new Date()
 
-  // Calculate new expiry if key has expiry
-  let expiresAt = currentKey.expires_at
+  // Calculate new expiry — always keep as ISO string or null
+  let expiresAt: string | null = currentKey.expires_at ?? null
   if (currentKey.key_type !== 'never_expire' && currentKey.expires_at) {
-    const now = new Date()
     const originalExpiry = new Date(currentKey.expires_at)
-    const originalCreated = new Date(currentKey.created_at)
     const daysRemaining = Math.floor((originalExpiry.getTime() - now.getTime()) / (24 * 60 * 60 * 1000))
-    
     if (daysRemaining > 0) {
-      expiresAt = new Date(now.getTime() + daysRemaining * 24 * 60 * 60 * 1000)
+      expiresAt = new Date(now.getTime() + daysRemaining * 24 * 60 * 60 * 1000).toISOString()
     }
   }
 
-  // Update key with new hash
+  // Update key with new hash — all values are plain strings/numbers
   const { data, error } = await admin
     .from('api_keys')
     .update({
-      key_hash: keyHash,
-      key_prefix: keyPrefix,
-      key_fingerprint: hashApiKey(fullKey + user.id + new Date().toISOString()),
-      expires_at: expiresAt,
-      last_rotated_at: new Date().toISOString(),
-      rotation_count: (currentKey.rotation_count || 0) + 1,
-      updated_at: new Date().toISOString(),
+      key_hash:        keyHash,
+      key_prefix:      keyPrefix,
+      key_fingerprint: hashApiKey(fullKey + user.id),
+      expires_at:      expiresAt,
+      last_rotated_at: now.toISOString(),
+      rotation_count:  (currentKey.rotation_count || 0) + 1,
+      updated_at:      now.toISOString(),
     })
     .eq('id', id)
     .eq('user_id', user.id)
