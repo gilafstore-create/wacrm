@@ -49,23 +49,23 @@ function hashApiKey(key: string): string {
   return crypto.createHash('sha256').update(key).digest('hex')
 }
 
-// Helper: Calculate expiry
-function calculateExpiry(keyType: string, customDays?: number): Date | null {
+// Helper: Calculate expiry — always returns ISO string or null
+function calculateExpiry(keyType: string, customDays?: number): string | null {
   const now = new Date()
   switch (keyType) {
     case '24h':
-      return new Date(now.getTime() + 24 * 60 * 60 * 1000)
+      return new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString()
     case '7d':
-      return new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
+      return new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString()
     case '30d':
-      return new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
+      return new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
     case '90d':
-      return new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000)
+      return new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000).toISOString()
     case '1y':
-      return new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000)
+      return new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString()
     case 'custom':
       if (customDays) {
-        return new Date(now.getTime() + customDays * 24 * 60 * 60 * 1000)
+        return new Date(now.getTime() + customDays * 24 * 60 * 60 * 1000).toISOString()
       }
       return null
     case 'never_expire':
@@ -146,7 +146,7 @@ export async function POST(request: NextRequest) {
       key_name,
       key_prefix: keyPrefix,
       key_hash: keyHash,
-      key_fingerprint: hashApiKey(fullKey + user.id + new Date().toISOString()),
+      key_fingerprint: hashApiKey(fullKey + user.id),
       key_type,
       expires_at: expiresAt,
       custom_expiry_days: key_type === 'custom' ? custom_expiry_days : null,
