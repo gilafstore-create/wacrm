@@ -274,11 +274,15 @@ export async function runIntegrationSync(
     }).eq('id', syncId)
   }
 
-  // Update integration last_sync_at + counters
-  await admin.from('website_integrations').update({
-    last_sync_at:          new Date().toISOString(),
+  // Update integration counters — only advance last_sync_at on success so failed
+  // syncs never move the incremental cursor (which would cause 0-record recovery syncs)
+  const integrationPatch: Record<string, unknown> = {
     total_synced_contacts: (intg.total_synced_contacts ?? 0) + synced,
-  }).eq('id', intg.id)
+  }
+  if (!syncError) {
+    integrationPatch.last_sync_at = new Date().toISOString()
+  }
+  await admin.from('website_integrations').update(integrationPatch).eq('id', intg.id)
 
   // Audit: record the sync outcome (Audit Center -> Sync tab)
   await writeAudit(admin, {
