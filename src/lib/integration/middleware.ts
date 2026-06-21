@@ -165,36 +165,68 @@ export async function validateApiKey(
     return { record, error: null }
   }
 
-  // ── 2. Try website_integrations (gs_live_... / gsk_... prefix) ───────────────
-  if (apiKey.startsWith('gs_live_') || apiKey.startsWith('gs_test_') || apiKey.startsWith('gsk_')) {
-    const webResult = await withRetry(() =>
-      admin
-        .from('website_integrations')
-        .select('id, user_id, website_api_key, website_secret, status')
-        .eq('website_api_key', apiKey)
-        .maybeSingle()
-    ) as { data: Record<string, unknown> | null; error: { message: string } | null }
-    const { data: webData, error: webError } = webResult
+  // ── 2. Try website_integrations — accepts any key prefix (gs_live_, gsk_, gilaf_, etc.) ──
+  const webResult = await withRetry(() =>
+    admin
+      .from('website_integrations')
+      .select('id, user_id, website_api_key, website_secret, status')
+      .eq('website_api_key', apiKey)
+      .maybeSingle()
+  ) as { data: Record<string, unknown> | null; error: { message: string } | null }
+  const { data: webData, error: webError } = webResult
 
-    if (!webError && webData) {
-      if (webData.status === 'disabled') return { record: null, error: 'Integration is disabled', rejectionReason: 'inactive' }
-      if (webData.status !== 'active') {
-        void admin.from('website_integrations').update({ status: 'active' }).eq('id', webData.id)
-      }
-      const record: ApiKeyRecord = {
-        id:         webData.id as string,
-        user_id:    webData.user_id as string,
-        api_key:    webData.website_api_key as string,
-        api_secret: webData.website_secret as string,
-        is_bcrypt:  false,
-        is_active:  true,
-        revoked_at: null,
-        expires_at: null,
-        permissions: ['*'],
-      }
-      setCachedKey(apiKey, record)
-      return { record, error: null }
+  if (!webError && webData) {
+    if (webData.status === 'disabled') return { record: null, error: 'Integration is disabled', rejectionReason: 'inactive' }
+    if (webData.status !== 'active') {
+      void admin.from('website_integrations').update({ status: 'active' }).eq('id', webData.id)
     }
+    const record: ApiKeyRecord = {
+      id:         webData.id as string,
+      user_id:    webData.user_id as string,
+      api_key:    webData.website_api_key as string,
+      api_secret: webData.website_secret as string,
+      is_bcrypt:  false,
+      is_active:  true,
+      revoked_at: null,
+      expires_at: null,
+      permissions: ['*'],
+    }
+    setCachedKey(apiKey, record)
+    return { record, error: null }
+  }
+
+  // ── 3. Try api_keys table by SHA-256 hash (standalone keys) ──────────────────
+  const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex')
+  const hashResult = await withRetry(() =>
+    admin
+      .from('api_keys')
+      .select('id, user_id, status, expires_at')
+      .eq('key_hash', keyHash)
+      .maybeSingle()
+  ) as { data: Record<string, unknown> | null; error: { message: string } | null }
+  const { data: hashData } = hashResult
+
+  if (hashData) {
+    if (hashData.status === 'disabled' || hashData.status === 'revoked') {
+      return { record: null, error: 'API key is inactive', rejectionReason: 'inactive' }
+    }
+    if (hashData.expires_at && new Date(hashData.expires_at as string) < new Date()) {
+      return { record: null, error: 'API key has expired', rejectionReason: 'expired' }
+    }
+    void admin.from('api_keys').update({ last_used_at: new Date().toISOString() }).eq('id', hashData.id)
+    const record: ApiKeyRecord = {
+      id:          hashData.id as string,
+      user_id:     hashData.user_id as string,
+      api_key:     apiKey,
+      api_secret:  '',
+      is_bcrypt:   false,
+      is_active:   true,
+      revoked_at:  null,
+      expires_at:  (hashData.expires_at as string) ?? null,
+      permissions: ['*'],
+    }
+    setCachedKey(apiKey, record)
+    return { record, error: null }
   }
 
   return { record: null, error: 'Invalid API key', rejectionReason: 'invalid' }
