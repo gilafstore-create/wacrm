@@ -1558,6 +1558,83 @@ function EventInspector({ integration }: { integration: Integration }) {
   );
 }
 
+// ─── Regenerate Website API Key ───────────────────────────────────────────────
+
+function RegenerateWebsiteKey({ intgId, onRefresh }: { intgId: string; onRefresh: () => void }) {
+  const [loading, setLoading] = useState(false);
+  const [newKey, setNewKey] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const regenerate = async () => {
+    if (!confirm("Regenerate the Website API Key?\n\nThe old key will stop working immediately. You must update GilafStore with the new key.")) return;
+    setLoading(true);
+    // Generate a new key client-side (same format as server)
+    const array = new Uint8Array(20);
+    crypto.getRandomValues(array);
+    const hex = Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
+    const generatedKey = `gsk_${hex}`;
+
+    const r = await fetch("/api/integrations", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: intgId, website_api_key: generatedKey }),
+    });
+    setLoading(false);
+    if (r.ok) {
+      setNewKey(generatedKey);
+      onRefresh();
+    } else {
+      alert("Failed to regenerate key. Try again.");
+    }
+  };
+
+  const handleCopy = () => {
+    if (newKey) {
+      navigator.clipboard.writeText(newKey).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 3000);
+      });
+    }
+  };
+
+  return (
+    <GlassCard className="p-5">
+      <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Website API Key (for sync)</h3>
+      <p className="text-xs text-slate-400 mb-4">
+        This key is sent by WACRM when pulling data from your website&apos;s <code className="text-violet-300">/api/crm/*</code> endpoints. 
+        Paste this same key in GilafStore → Admin → CE WACRM Test → &quot;WACRM API Key&quot; field.
+      </p>
+      {newKey ? (
+        <div className="space-y-3">
+          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+            <div className="flex items-center gap-2 mb-2">
+              <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+              <span className="text-sm font-semibold text-emerald-400">New Key Generated — Copy Now!</span>
+            </div>
+            <p className="text-xs text-slate-400 mb-2">This is the only time you&apos;ll see the full key. Paste it in GilafStore.</p>
+            <div className="flex items-center gap-2 rounded-lg bg-slate-900 border border-slate-700 px-3 py-2">
+              <code className="flex-1 text-xs text-violet-300 font-mono break-all select-all">{newKey}</code>
+              <button onClick={handleCopy} className="shrink-0 text-slate-400 hover:text-white transition-colors">
+                {copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+              </button>
+            </div>
+            {copied && <p className="text-xs text-emerald-400 mt-1">✓ Copied to clipboard!</p>}
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={regenerate}
+          disabled={loading}
+          className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2.5 text-sm font-medium text-amber-300 hover:bg-amber-500/20 transition-colors disabled:opacity-50"
+        >
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+          Regenerate Website API Key
+        </button>
+      )}
+    </GlassCard>
+  );
+}
+
 // ─── Enterprise Detail View ───────────────────────────────────────────────────
 
 type EnterpriseTab = "overview" | "keys" | "security" | "health" | "monitor" | "sync" | "webhooks" | "events" | "audit";
@@ -1661,6 +1738,9 @@ function EnterpriseDetail({ intg, onBack, onRefresh }: { intg: Integration; onBa
                 ))}
               </div>
             </GlassCard>
+
+            {/* Regenerate Website API Key */}
+            <RegenerateWebsiteKey intgId={intg.id} onRefresh={onRefresh} />
           </div>
         )}
 
