@@ -56,6 +56,8 @@ interface Integration {
   discovered_version: string | null;
   created_at: string;
   website_api_key: string;
+  website_secret: string | null;
+  webhook_secret: string | null;
   connection_token: string | null;
   next_sync_at: string | null;
   last_sync_attempt_at: string | null;
@@ -1567,79 +1569,110 @@ function EventInspector({ integration }: { integration: Integration }) {
   );
 }
 
-// ─── Regenerate Website API Key ───────────────────────────────────────────────
+// ─── Integration Credentials (Overview Tab) ──────────────────────────────────
 
-function RegenerateWebsiteKey({ intgId, onRefresh }: { intgId: string; onRefresh: () => void }) {
-  const [loading, setLoading] = useState(false);
+function IntegrationCredentials({ intg, onRefresh }: { intg: Integration; onRefresh: () => void }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const [regenerating, setRegenerating] = useState(false);
   const [newKey, setNewKey] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
 
-  const regenerate = async () => {
-    if (!confirm("Regenerate the Website API Key?\n\nThe old key will stop working immediately. You must update GilafStore with the new key.")) return;
-    setLoading(true);
-    // Generate a new key client-side (same format as server)
-    const array = new Uint8Array(20);
+  const handleCopy = (value: string, id: string) => {
+    navigator.clipboard.writeText(value).then(() => {
+      setCopied(id);
+      setTimeout(() => setCopied(null), 2000);
+    });
+  };
+
+  const regenerateKey = async () => {
+    if (!confirm("Regenerate the Website API Key?\n\nThe old key will stop working immediately. You must update the same key in GilafStore.")) return;
+    setRegenerating(true);
+    // Generate new key matching the master format
+    const array = new Uint8Array(4);
     crypto.getRandomValues(array);
-    const hex = Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
-    const generatedKey = `gsk_${hex}`;
+    const prefix = 'gilaf_' + Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 8);
+    const secretArray = new Uint8Array(32);
+    crypto.getRandomValues(secretArray);
+    const secret = btoa(String.fromCharCode(...secretArray)).replace(/=+$/, '');
+    const generatedKey = `${prefix}_${secret}`;
 
     const r = await fetch("/api/integrations", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: intgId, website_api_key: generatedKey }),
+      body: JSON.stringify({ id: intg.id, website_api_key: generatedKey }),
     });
-    setLoading(false);
+    setRegenerating(false);
     if (r.ok) {
       setNewKey(generatedKey);
+      navigator.clipboard.writeText(generatedKey);
+      setCopied("new_key");
+      setTimeout(() => setCopied(null), 3000);
       onRefresh();
     } else {
       alert("Failed to regenerate key. Try again.");
     }
   };
 
-  const handleCopy = () => {
-    if (newKey) {
-      navigator.clipboard.writeText(newKey).then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 3000);
-      });
-    }
-  };
+  const credentials = [
+    { id: "api_key",    label: "Website API Key",                value: intg.website_api_key || "—" },
+    { id: "secret",     label: "Signing Secret",                 value: intg.website_secret || "—" },
+    { id: "webhook_s",  label: "Inbound Secret",                 value: intg.webhook_secret || "—" },
+    { id: "webhook_url",label: "Webhook URL",                    value: intg.webhook_url || "—" },
+  ];
 
   return (
     <GlassCard className="p-5">
-      <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Website API Key (for sync)</h3>
-      <p className="text-xs text-slate-400 mb-4">
-        This key is sent by WACRM when pulling data from your website&apos;s <code className="text-violet-300">/api/crm/*</code> endpoints. 
-        Paste this same key in GilafStore → Admin → CE WACRM Test → &quot;WACRM API Key&quot; field.
-      </p>
-      {newKey ? (
-        <div className="space-y-3">
-          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
-            <div className="flex items-center gap-2 mb-2">
-              <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-              <span className="text-sm font-semibold text-emerald-400">New Key Generated — Copy Now!</span>
-            </div>
-            <p className="text-xs text-slate-400 mb-2">This is the only time you&apos;ll see the full key. Paste it in GilafStore.</p>
-            <div className="flex items-center gap-2 rounded-lg bg-slate-900 border border-slate-700 px-3 py-2">
-              <code className="flex-1 text-xs text-violet-300 font-mono break-all select-all">{newKey}</code>
-              <button onClick={handleCopy} className="shrink-0 text-slate-400 hover:text-white transition-colors">
-                {copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
-              </button>
-            </div>
-            {copied && <p className="text-xs text-emerald-400 mt-1">✓ Copied to clipboard!</p>}
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Master Credentials</h3>
+        <span className="text-[10px] text-slate-600 uppercase">Same key used everywhere</span>
+      </div>
+
+      {newKey && (
+        <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+            <span className="text-sm font-semibold text-emerald-400">New Key Generated — Copy Now!</span>
+          </div>
+          <p className="text-xs text-slate-400 mb-2">This is the only time you&apos;ll see the full key. Update GilafStore with this key.</p>
+          <div className="flex items-center gap-2 rounded-lg bg-slate-900 border border-slate-700 px-3 py-2">
+            <code className="flex-1 text-xs text-violet-300 font-mono break-all select-all">{newKey}</code>
+            <button onClick={() => handleCopy(newKey, "new_key")} className="shrink-0 text-slate-400 hover:text-white transition-colors">
+              {copied === "new_key" ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+            </button>
           </div>
         </div>
-      ) : (
-        <button
-          onClick={regenerate}
-          disabled={loading}
-          className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2.5 text-sm font-medium text-amber-300 hover:bg-amber-500/20 transition-colors disabled:opacity-50"
-        >
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-          Regenerate Website API Key
-        </button>
       )}
+
+      <div className="space-y-3">
+        {credentials.map(({ id, label, value }) => (
+          <div key={id} className="flex items-center gap-3">
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-slate-500 mb-0.5">{label}</p>
+              <div className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2">
+                <code className="flex-1 text-xs font-mono text-slate-300 truncate">{value}</code>
+                <button
+                  onClick={() => handleCopy(value, id)}
+                  className={`shrink-0 rounded p-1 transition-colors ${copied === id ? "text-emerald-400" : "text-slate-500 hover:text-white hover:bg-slate-700"}`}
+                  title={`Copy ${label}`}
+                >
+                  {copied === id ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-4 pt-4 border-t border-white/5">
+        <button
+          onClick={regenerateKey}
+          disabled={regenerating}
+          className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs font-medium text-amber-300 hover:bg-amber-500/20 transition-colors disabled:opacity-50"
+        >
+          {regenerating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+          Regenerate API Key
+        </button>
+        <p className="mt-2 text-[11px] text-slate-600">Generates a new key and invalidates the old one. You must update GilafStore after regeneration.</p>
+      </div>
     </GlassCard>
   );
 }
@@ -1731,7 +1764,6 @@ function EnterpriseDetail({ intg, onBack, onRefresh }: { intg: Integration; onBa
               <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Integration Details</h3>
               <div className="grid grid-cols-2 gap-y-3 gap-x-8 text-sm">
                 {([
-                  ["API Key", <span key="ak" className="font-mono text-xs">{intg.website_api_key?.slice(0, 8)}••••••••</span>],
                   ["Platform", intg.platform || "custom"],
                   ["Detected Version", intg.discovered_version || "—"],
                   ["Created", new Date(intg.created_at).toLocaleDateString()],
@@ -1748,8 +1780,8 @@ function EnterpriseDetail({ intg, onBack, onRefresh }: { intg: Integration; onBa
               </div>
             </GlassCard>
 
-            {/* Regenerate Website API Key */}
-            <RegenerateWebsiteKey intgId={intg.id} onRefresh={onRefresh} />
+            {/* Master Credentials */}
+            <IntegrationCredentials intg={intg} onRefresh={onRefresh} />
           </div>
         )}
 
@@ -1911,9 +1943,11 @@ function CredentialsModal({ data, onDone }: { data: Record<string, unknown>; onD
   const [copied, setCopied] = useState<string | null>(null);
 
   const fields = [
-    { label: "WACRM API Key",                    key: "connection_token" },
+    { label: "Website API Key (master key)",     key: "website_api_key"  },
     { label: "Signing Secret (outbound HMAC)",   key: "website_secret"   },
     { label: "Inbound Secret (verify WACRM→us)", key: "webhook_secret"   },
+    { label: "Connection Token",                 key: "connection_token" },
+    { label: "Webhook URL",                      key: "webhook_url"     },
   ];
 
   const handleCopy = (key: string) => {
@@ -1974,7 +2008,7 @@ function CredentialsModal({ data, onDone }: { data: Record<string, unknown>; onD
               : "border-slate-700 bg-slate-800/60 text-slate-400 hover:border-slate-600 hover:text-white"
           }`}
         >
-          {copied === "__all__" ? <><Check className="h-4 w-4" /> All Copied!</> : <><Copy className="h-4 w-4" /> Copy All 3 Credentials</>}
+          {copied === "__all__" ? <><Check className="h-4 w-4" /> All Copied!</> : <><Copy className="h-4 w-4" /> Copy All Credentials</>}
         </button>
 
         <div className="mt-4 rounded-lg border border-slate-700 bg-slate-900/60 p-3 text-xs text-slate-400">
