@@ -159,7 +159,7 @@ export async function runIntegrationSync(
       const sinceParam = intg.last_sync_at
         ? `&since=${encodeURIComponent(intg.last_sync_at)}`
         : ''
-      const res = await fetch(`${base}/api/crm/customers?limit=500${sinceParam}`, {
+      const res = await fetch(`${base}/api/crm/customers.php?limit=500${sinceParam}`, {
         headers: { 'X-GilafStore-Key': apiKey, 'Accept': 'application/json' },
         signal: AbortSignal.timeout(30_000),
       }).catch(() => null)
@@ -212,7 +212,7 @@ export async function runIntegrationSync(
       const ordersSinceParam = intg.last_sync_at
         ? `&since=${encodeURIComponent(intg.last_sync_at)}`
         : ''
-      const ordersRes = await fetch(`${base}/api/crm/orders?limit=500${ordersSinceParam}`, {
+      const ordersRes = await fetch(`${base}/api/crm/orders.php?limit=500${ordersSinceParam}`, {
         headers: { 'X-GilafStore-Key': apiKey, 'Accept': 'application/json' },
         signal: AbortSignal.timeout(30_000),
       }).catch(() => null)
