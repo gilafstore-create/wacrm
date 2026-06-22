@@ -242,7 +242,7 @@ const KNOWN_HANDLERS = [
   'order.placed','order.confirmed','order.packed','order.shipped',
   'order.delivered','order.cancelled','order.refunded','payment.success','payment.failed',
   'cart.abandoned','cart.recovered','customer.created','customer.updated','customer.registered',
-  'customer.login','trigger.order_created','trigger.payment_success',
+  'customer.login','customer.otp_request','trigger.order_created','trigger.payment_success',
   'contact.tag_added','product.viewed','checkout.started',
 ]
 
@@ -273,6 +273,7 @@ async function handleEvent(
     case 'customer.registered':   addStep('Handler', 'handleCustomerRegistered');         return handleCustomerRegistered(admin, data, ownerUserId, addStep)
     case 'customer.updated':      addStep('Handler', 'handleCustomerUpdated');          return handleCustomerUpdated(admin, data, ownerUserId, addStep)
     case 'customer.login':        addStep('Handler', 'handleCustomerLogin');            return handleCustomerLogin(admin, data, ownerUserId, addStep)
+    case 'customer.otp_request':  addStep('Handler', 'handleOTPRequest');               return handleOTPRequest(admin, data, ownerUserId, addStep)
     case 'trigger.order_created':   addStep('Handler', 'handleTriggerOrderCreated');   return handleTriggerOrderCreated(admin, data, ownerUserId, addStep)
     case 'trigger.payment_success': addStep('Handler', 'handleTriggerPaymentSuccess'); return handleTriggerPaymentSuccess(admin, data, ownerUserId, addStep)
     case 'contact.tag_added':     addStep('Handler', 'handleContactTagAdded');          return handleContactTagAdded(admin, data, ownerUserId, addStep)
@@ -469,7 +470,19 @@ async function handleCustomerLogin(admin: any, data: any, ownerUserId: string, a
   addStep('Contact', `id=${contact.id}`)
   await admin.from('contacts').update({ last_contacted_at: new Date().toISOString() }).eq('id', contact.id)
   addStep('Contact', 'last_contacted_at updated')
+  await triggerAutomation(admin, contact, 'login_otp', data)
+  addStep('Automation', 'login_otp triggered (login)')
   return { success: true, contact_id: contact.id, handler: 'handleCustomerLogin' }
+}
+
+async function handleOTPRequest(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
+  const { phone, otp, purpose, expiry_minutes, name } = data
+  const contact = await findOrCreateContact(admin, { phone, name }, ownerUserId)
+  if (!contact) return { success: true, handler: 'handleOTPRequest', message: 'Contact not found' }
+  addStep('Contact', `id=${contact.id}`)
+  await triggerAutomation(admin, contact, 'login_otp', { phone, otp, purpose: purpose ?? 'login', expiry_minutes: expiry_minutes ?? 5, name: contact.name ?? '' })
+  addStep('Automation', `login_otp triggered (purpose=${purpose ?? 'login'})`)
+  return { success: true, contact_id: contact.id, handler: 'handleOTPRequest' }
 }
 
 async function handleTriggerOrderCreated(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {

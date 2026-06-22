@@ -21,6 +21,7 @@ export type TemplateSlug =
   | 'order_refunded_notification'
   | 'customer_welcome_notification'
   | 'customer_registered_notification'
+  | 'login_otp_notification'
 
 export interface TemplateStepSeed {
   step_type: AutomationStepType
@@ -336,6 +337,27 @@ Object.assign(AUTOMATION_TEMPLATES, {
           language: 'en_US',
           variables: {
             '1': '{{vars.name}}',
+          },
+        },
+      },
+    ],
+  },
+
+  login_otp_notification: {
+    slug: 'login_otp_notification',
+    name: 'Login OTP Message',
+    description: 'Send a WhatsApp OTP to the customer when they request a login OTP.',
+    trigger_type: 'login_otp' as AutomationTriggerType,
+    trigger_config: {},
+    steps: [
+      {
+        step_type: 'send_template' as AutomationStepType,
+        step_config: {
+          template_name: 'login_otp',
+          language: 'en_US',
+          variables: {
+            '1': '{{vars.otp}}',
+            '2': '{{vars.expiry_minutes}}',
           },
         },
       },

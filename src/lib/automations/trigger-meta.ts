@@ -80,6 +80,10 @@ export const TRIGGER_META: Record<AutomationTriggerType, TriggerMeta> = {
     label: 'Customer Registered',
     pillClass: 'border-primary/30 bg-primary/10 text-primary',
   },
+  login_otp: {
+    label: 'Login OTP',
+    pillClass: 'border-violet-500/30 bg-violet-500/10 text-violet-300',
+  },
 }
 
 export function triggerMeta(t: AutomationTriggerType | string): TriggerMeta {

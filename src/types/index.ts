@@ -311,7 +311,8 @@ export type AutomationTriggerType =
   | 'payment_failed'
   | 'cart_abandoned'
   | 'customer_created'
-  | 'customer_registered';
+  | 'customer_registered'
+  | 'login_otp';
 
 
 export type AutomationStepType =
