@@ -240,8 +240,8 @@ export async function POST(request: NextRequest) {
 // Known handler names for debug_info on unknown events
 const KNOWN_HANDLERS = [
   'order.placed','order.confirmed','order.packed','order.shipped',
-  'order.delivered','order.cancelled','payment.success','payment.failed',
-  'cart.abandoned','cart.recovered','customer.created','customer.updated',
+  'order.delivered','order.cancelled','order.refunded','payment.success','payment.failed',
+  'cart.abandoned','cart.recovered','customer.created','customer.updated','customer.registered',
   'customer.login','trigger.order_created','trigger.payment_success',
   'contact.tag_added','product.viewed','checkout.started',
 ]
@@ -264,11 +264,13 @@ async function handleEvent(
     case 'order.shipped':         addStep('Handler', 'handleOrderStatusChange[shipped]');   return handleOrderStatusChange(admin, data, 'shipped', ownerUserId, addStep)
     case 'order.delivered':       addStep('Handler', 'handleOrderStatusChange[delivered]'); return handleOrderStatusChange(admin, data, 'delivered', ownerUserId, addStep)
     case 'order.cancelled':       addStep('Handler', 'handleOrderStatusChange[cancelled]'); return handleOrderStatusChange(admin, data, 'cancelled', ownerUserId, addStep)
+    case 'order.refunded':        addStep('Handler', 'handleOrderStatusChange[refunded]');  return handleOrderStatusChange(admin, data, 'refunded', ownerUserId, addStep)
     case 'payment.success':       addStep('Handler', 'handlePaymentSuccess');           return handlePaymentSuccess(admin, data, ownerUserId, addStep)
     case 'payment.failed':        addStep('Handler', 'handlePaymentFailed');            return handlePaymentFailed(admin, data, ownerUserId, addStep)
     case 'cart.abandoned':        addStep('Handler', 'handleCartAbandoned');            return handleCartAbandoned(admin, data, ownerUserId, addStep)
     case 'cart.recovered':        addStep('Handler', 'handleCartRecovered');            return handleCartRecovered(admin, data, ownerUserId, addStep)
     case 'customer.created':      addStep('Handler', 'handleCustomerCreated');          return handleCustomerCreated(admin, data, ownerUserId, addStep)
+    case 'customer.registered':   addStep('Handler', 'handleCustomerRegistered');         return handleCustomerRegistered(admin, data, ownerUserId, addStep)
     case 'customer.updated':      addStep('Handler', 'handleCustomerUpdated');          return handleCustomerUpdated(admin, data, ownerUserId, addStep)
     case 'customer.login':        addStep('Handler', 'handleCustomerLogin');            return handleCustomerLogin(admin, data, ownerUserId, addStep)
     case 'trigger.order_created':   addStep('Handler', 'handleTriggerOrderCreated');   return handleTriggerOrderCreated(admin, data, ownerUserId, addStep)
@@ -386,6 +388,8 @@ async function handlePaymentFailed(admin: any, data: any, ownerUserId: string, a
     content: `⚠️ Payment failed for order #${order_id}`, type: 'system',
   })
   addStep('Note', `Payment failed noted`)
+  await triggerAutomation(admin, contact, 'payment_failed', data)
+  addStep('Automation', 'payment_failed triggered')
   return { success: true, contact_id: contact.id, handler: 'handlePaymentFailed' }
 }
 
@@ -413,6 +417,8 @@ async function handleCartRecovered(admin: any, data: any, ownerUserId: string, a
   await removeTag(admin, contact, 'cart-abandoned')
   await ensureTag(admin, contact, 'cart-recovered')
   addStep('Tags', 'cart-abandoned removed, cart-recovered added')
+  await triggerAutomation(admin, contact, 'order_placed', data)
+  addStep('Automation', 'order_placed triggered (cart recovered)')
   return { success: true, contact_id: contact.id, handler: 'handleCartRecovered' }
 }
 
@@ -425,6 +431,17 @@ async function handleCustomerCreated(admin: any, data: any, ownerUserId: string,
   await triggerAutomation(admin, contact, 'customer_created', data)
   addStep('Automation', 'customer_created triggered')
   return { success: true, contact_id: contact.id, handler: 'handleCustomerCreated' }
+}
+
+async function handleCustomerRegistered(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
+  const { name, phone, email, local_user_id } = data
+  const contact = await findOrCreateContact(admin, { name, phone, email, local_user_id }, ownerUserId)
+  if (!contact) { addStep('Contact', 'Failed to create', false); return { success: false, error: 'Failed to create contact', handler: 'handleCustomerRegistered' } }
+  addStep('Contact', `id=${contact.id}`)
+  await ensureTag(admin, contact, 'registered')
+  await triggerAutomation(admin, contact, 'customer_registered', data)
+  addStep('Automation', 'customer_registered triggered')
+  return { success: true, contact_id: contact.id, handler: 'handleCustomerRegistered' }
 }
 
 async function handleCustomerUpdated(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
@@ -440,6 +457,8 @@ async function handleCustomerUpdated(admin: any, data: any, ownerUserId: string,
     await admin.from('contacts').update(updates).eq('id', contact.id)
     addStep('Contact Updated', Object.keys(updates).join(', '))
   }
+  await triggerAutomation(admin, contact, 'customer_created', data)
+  addStep('Automation', 'customer_created triggered (customer updated)')
   return { success: true, contact_id: contact.id, handler: 'handleCustomerUpdated' }
 }
 
@@ -501,8 +520,8 @@ async function handleTriggerOrderCreated(admin: any, data: any, ownerUserId: str
   }
 
   await ensureTag(admin, contact, 'customer')
-  await triggerAutomation(admin, contact, 'order_created', data)
-  addStep('Automation', 'order_created triggered')
+  await triggerAutomation(admin, contact, 'order_placed', data)
+  addStep('Automation', 'order_placed triggered')
 
   return { success: true, contact_id: contact.id, order_ref: String(order_id), handler: 'handleTriggerOrderCreated', message: 'Trigger order_created processed' }
 }
@@ -551,7 +570,7 @@ async function handleContactTagAdded(admin: any, data: any, ownerUserId: string,
   addStep('Contact', `id=${contact.id}`)
 
   await ensureTag(admin, contact, String(tag))
-  await triggerAutomation(admin, contact, 'contact_tag_added', { ...data, tag_name: tag })
+  await triggerAutomation(admin, contact, 'tag_added', { ...data, tag_name: tag })
   addStep('Tags', `Tag ${tag} added`)
 
   return { success: true, contact_id: contact.id, handler: 'handleContactTagAdded', tag, message: 'Tag synced to CRM contact' }

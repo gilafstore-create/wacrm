@@ -16,21 +16,23 @@ export default function NewAutomationPage() {
   const template = params.get("template") as TemplateSlug | null
 
   const initial: BuilderInitial = useMemo(() => {
-    if (template && AUTOMATION_TEMPLATES[template]) {
-      const t = AUTOMATION_TEMPLATES[template]
+    const allTemplates = AUTOMATION_TEMPLATES as Record<string, (typeof AUTOMATION_TEMPLATES)[keyof typeof AUTOMATION_TEMPLATES]>
+    if (template && allTemplates[template]) {
+      const t = allTemplates[template]
       const steps = expandFromSeeds(
-        t.steps.map((seed, idx) => ({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        t.steps.map((seed: any, idx: number) => ({
           index: idx,
-          step_type: seed.step_type,
+          step_type: seed.step_type as AutomationStepType,
           step_config: seed.step_config as Record<string, unknown>,
-          branch: seed.branch ?? null,
-          parent_index: seed.parent_index ?? null,
+          branch: (seed.branch ?? null) as 'yes' | 'no' | null,
+          parent_index: (seed.parent_index ?? null) as number | null,
         })),
       )
       return {
         name: t.name,
         description: t.description,
-        trigger_type: t.trigger_type,
+        trigger_type: t.trigger_type as AutomationTriggerType,
         trigger_config: t.trigger_config as Record<string, unknown>,
         is_active: false,
         steps,

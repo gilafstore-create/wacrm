@@ -48,7 +48,7 @@ const TEMPLATE_ORDER: TemplateSlug[] = [
   "follow_up_reminder",
 ]
 
-const TEMPLATE_ICON: Record<TemplateSlug, typeof Zap> = {
+const TEMPLATE_ICON: Partial<Record<TemplateSlug, typeof Zap>> = {
   welcome_message: MessageCircle,
   out_of_office: Clock,
   lead_qualifier: Users,
@@ -176,8 +176,8 @@ export default function AutomationsPage() {
           <h2 className="mb-3 text-sm font-semibold text-slate-300">Quick-start templates</h2>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             {TEMPLATE_ORDER.map((slug) => {
-              const t = AUTOMATION_TEMPLATES[slug]
-              const Icon = TEMPLATE_ICON[slug]
+              const t = (AUTOMATION_TEMPLATES as Record<string, typeof AUTOMATION_TEMPLATES[keyof typeof AUTOMATION_TEMPLATES]>)[slug]
+              const Icon = TEMPLATE_ICON[slug] ?? Zap
               return (
                 <button
                   key={slug}

@@ -10,6 +10,17 @@ export type TemplateSlug =
   | 'out_of_office'
   | 'lead_qualifier'
   | 'follow_up_reminder'
+  // ── E-commerce / GilafStore order templates ──
+  | 'order_placed_notification'
+  | 'order_confirmed_notification'
+  | 'order_shipped_notification'
+  | 'order_delivered_notification'
+  | 'order_cancelled_notification'
+  | 'payment_success_notification'
+  | 'payment_failed_notification'
+  | 'order_refunded_notification'
+  | 'customer_welcome_notification'
+  | 'customer_registered_notification'
 
 export interface TemplateStepSeed {
   step_type: AutomationStepType
@@ -28,7 +39,7 @@ export interface AutomationTemplateDefinition {
   steps: TemplateStepSeed[]
 }
 
-export const AUTOMATION_TEMPLATES: Record<TemplateSlug, AutomationTemplateDefinition> = {
+export const AUTOMATION_TEMPLATES = {
   welcome_message: {
     slug: 'welcome_message',
     name: 'Welcome Message',
@@ -127,6 +138,232 @@ export const AUTOMATION_TEMPLATES: Record<TemplateSlug, AutomationTemplateDefini
   },
 }
 
+// ── E-commerce automation template seeds ─────────────────────────────────────
+//
+// Variable mapping convention:
+//   The engine passes the full GilafStore event payload as context.vars.
+//   interpolate() resolves {{vars.order_id}} → value from vars.order_id.
+//   Meta positional params ("1","2",…) are filled in numeric order from
+//   cfg.variables, so {"1":"{{vars.order_id}}","2":"{{vars.total}}"} maps
+//   {{1}} → order_id and {{2}} → total in the WhatsApp template body.
+//
+// Template names must match the approved Meta template name exactly.
+
+Object.assign(AUTOMATION_TEMPLATES, {
+  order_placed_notification: {
+    slug: 'order_placed_notification',
+    name: 'Order Placed Notification',
+    description: 'Send order confirmation WhatsApp message when a new order is placed.',
+    trigger_type: 'order_placed' as AutomationTriggerType,
+    trigger_config: {},
+    steps: [
+      {
+        step_type: 'send_template' as AutomationStepType,
+        step_config: {
+          template_name: 'order_confirmation',
+          language: 'en_US',
+          variables: {
+            '1': '{{vars.order_id}}',
+            '2': '{{vars.total}}',
+            '3': '{{vars.customer_name}}',
+          },
+        },
+      },
+    ],
+  },
+
+  order_confirmed_notification: {
+    slug: 'order_confirmed_notification',
+    name: 'Order Confirmed Notification',
+    description: 'Notify customer when their order is confirmed.',
+    trigger_type: 'order_confirmed' as AutomationTriggerType,
+    trigger_config: {},
+    steps: [
+      {
+        step_type: 'send_template' as AutomationStepType,
+        step_config: {
+          template_name: 'order_confirmation',
+          language: 'en_US',
+          variables: {
+            '1': '{{vars.order_id}}',
+            '2': '{{vars.total}}',
+            '3': '{{vars.customer_name}}',
+          },
+        },
+      },
+    ],
+  },
+
+  order_shipped_notification: {
+    slug: 'order_shipped_notification',
+    name: 'Order Shipped Notification',
+    description: 'Send shipping details and tracking info when order is dispatched.',
+    trigger_type: 'order_shipped' as AutomationTriggerType,
+    trigger_config: {},
+    steps: [
+      {
+        step_type: 'send_template' as AutomationStepType,
+        step_config: {
+          template_name: 'order_shipped',
+          language: 'en_US',
+          variables: {
+            '1': '{{vars.order_id}}',
+            '2': '{{vars.courier}}',
+            '3': '{{vars.tracking_number}}',
+          },
+        },
+      },
+    ],
+  },
+
+  order_delivered_notification: {
+    slug: 'order_delivered_notification',
+    name: 'Order Delivered Notification',
+    description: 'Notify customer when their order has been delivered.',
+    trigger_type: 'order_delivered' as AutomationTriggerType,
+    trigger_config: {},
+    steps: [
+      {
+        step_type: 'send_template' as AutomationStepType,
+        step_config: {
+          template_name: 'order_delivered',
+          language: 'en_US',
+          variables: {
+            '1': '{{vars.order_id}}',
+            '2': '{{vars.customer_name}}',
+          },
+        },
+      },
+    ],
+  },
+
+  order_cancelled_notification: {
+    slug: 'order_cancelled_notification',
+    name: 'Order Cancelled Notification',
+    description: 'Notify customer when their order is cancelled.',
+    trigger_type: 'order_cancelled' as AutomationTriggerType,
+    trigger_config: {},
+    steps: [
+      {
+        step_type: 'send_template' as AutomationStepType,
+        step_config: {
+          template_name: 'order_cancelled',
+          language: 'en_US',
+          variables: {
+            '1': '{{vars.order_id}}',
+            '2': '{{vars.customer_name}}',
+          },
+        },
+      },
+    ],
+  },
+
+  payment_success_notification: {
+    slug: 'payment_success_notification',
+    name: 'Payment Success Notification',
+    description: 'Send payment confirmation WhatsApp message after successful payment.',
+    trigger_type: 'payment_success' as AutomationTriggerType,
+    trigger_config: {},
+    steps: [
+      {
+        step_type: 'send_template' as AutomationStepType,
+        step_config: {
+          template_name: 'payment_success',
+          language: 'en_US',
+          variables: {
+            '1': '{{vars.order_id}}',
+            '2': '{{vars.amount}}',
+            '3': '{{vars.payment_method}}',
+          },
+        },
+      },
+    ],
+  },
+
+  payment_failed_notification: {
+    slug: 'payment_failed_notification',
+    name: 'Payment Failed Notification',
+    description: 'Alert customer when their payment fails so they can retry.',
+    trigger_type: 'payment_failed' as AutomationTriggerType,
+    trigger_config: {},
+    steps: [
+      {
+        step_type: 'send_template' as AutomationStepType,
+        step_config: {
+          template_name: 'payment_failed',
+          language: 'en_US',
+          variables: {
+            '1': '{{vars.order_id}}',
+            '2': '{{vars.amount}}',
+          },
+        },
+      },
+    ],
+  },
+
+  order_refunded_notification: {
+    slug: 'order_refunded_notification',
+    name: 'Order Refunded Notification',
+    description: 'Notify customer when their order is refunded.',
+    trigger_type: 'order_refunded' as AutomationTriggerType,
+    trigger_config: {},
+    steps: [
+      {
+        step_type: 'send_template' as AutomationStepType,
+        step_config: {
+          template_name: 'order_refunded',
+          language: 'en_US',
+          variables: {
+            '1': '{{vars.order_id}}',
+            '2': '{{vars.amount}}',
+          },
+        },
+      },
+    ],
+  },
+
+  customer_registered_notification: {
+    slug: 'customer_registered_notification',
+    name: 'Customer Registered Message',
+    description: 'Send a welcome WhatsApp message when a customer registers on the store.',
+    trigger_type: 'customer_registered' as AutomationTriggerType,
+    trigger_config: {},
+    steps: [
+      {
+        step_type: 'send_template' as AutomationStepType,
+        step_config: {
+          template_name: 'welcome_message',
+          language: 'en_US',
+          variables: {
+            '1': '{{vars.name}}',
+          },
+        },
+      },
+    ],
+  },
+
+  customer_welcome_notification: {
+    slug: 'customer_welcome_notification',
+    name: 'Customer Welcome Message',
+    description: 'Send a welcome WhatsApp message when a new customer registers.',
+    trigger_type: 'customer_created' as AutomationTriggerType,
+    trigger_config: {},
+    steps: [
+      {
+        step_type: 'send_template' as AutomationStepType,
+        step_config: {
+          template_name: 'welcome_message',
+          language: 'en_US',
+          variables: {
+            '1': '{{vars.name}}',
+          },
+        },
+      },
+    ],
+  },
+})
+
 export function getTemplate(slug: string): AutomationTemplateDefinition | null {
-  return AUTOMATION_TEMPLATES[slug as TemplateSlug] ?? null
+  const all = AUTOMATION_TEMPLATES as Record<string, AutomationTemplateDefinition>
+  return all[slug] ?? null
 }
