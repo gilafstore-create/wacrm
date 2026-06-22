@@ -41,7 +41,7 @@ function sanitizeIntegration(row: Record<string, unknown>) {
     website_secret:  maskKey(String(row.website_secret ?? '')),
     webhook_secret:  row.webhook_secret ? maskKey(String(row.webhook_secret ?? '')) : null,
     connection_token: row.connection_token
-      ? (row.token_used_at ? '(used)' : maskKey(String(row.connection_token)))
+      ? (row.token_used_at ? '(used)' : String(row.connection_token))
       : null,
   }
 }
