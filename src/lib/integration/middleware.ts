@@ -158,7 +158,8 @@ export async function validateApiKey(
     }
     if (!data.is_active) return { record: null, error: 'API key is inactive', rejectionReason: 'inactive' }
 
-    void admin.from('integration_keys').update({ last_used_at: new Date().toISOString() }).eq('id', data.id)
+    // Fire-and-forget — .then() ensures the request actually dispatches (Supabase builders are thenables, not eager Promises)
+    admin.from('integration_keys').update({ last_used_at: new Date().toISOString() }).eq('id', data.id).then(() => {}, () => {})
 
     const record = data as unknown as ApiKeyRecord
     setCachedKey(apiKey, record)
@@ -178,7 +179,8 @@ export async function validateApiKey(
   if (!webError && webData) {
     if (webData.status === 'disabled') return { record: null, error: 'Integration is disabled', rejectionReason: 'inactive' }
     if (webData.status !== 'active') {
-      void admin.from('website_integrations').update({ status: 'active' }).eq('id', webData.id)
+      // Fire-and-forget — .then() ensures dispatch (void would never call .then())
+      admin.from('website_integrations').update({ status: 'active' }).eq('id', webData.id).then(() => {}, () => {})
     }
     const record: ApiKeyRecord = {
       id:         webData.id as string,
@@ -213,7 +215,8 @@ export async function validateApiKey(
     if (hashData.expires_at && new Date(hashData.expires_at as string) < new Date()) {
       return { record: null, error: 'API key has expired', rejectionReason: 'expired' }
     }
-    void admin.from('api_keys').update({ last_used_at: new Date().toISOString() }).eq('id', hashData.id)
+    // Fire-and-forget — .then() ensures dispatch
+    admin.from('api_keys').update({ last_used_at: new Date().toISOString() }).eq('id', hashData.id).then(() => {}, () => {})
     const record: ApiKeyRecord = {
       id:          hashData.id as string,
       user_id:     hashData.user_id as string,
@@ -375,7 +378,8 @@ export async function checkWebhookReplay(
 
   // Cleanup expired nonces occasionally (1-in-20 chance, non-blocking)
   if (Math.random() < 0.05) {
-    void admin.from('integration_webhook_nonces').delete().lt('expires_at', new Date().toISOString())
+    // Fire-and-forget cleanup — .then() ensures dispatch
+    admin.from('integration_webhook_nonces').delete().lt('expires_at', new Date().toISOString()).then(() => {}, () => {})
   }
 
   return { blocked: false, reason: '' }

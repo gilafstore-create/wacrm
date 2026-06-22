@@ -66,7 +66,8 @@ export async function POST(request: NextRequest) {
     const messageId = metaResult?.messageId ?? null
     const status = messageId ? 'sent' : 'failed'
 
-    void admin.from('integration_message_logs').insert({
+    // Fire-and-forget message log — .then() ensures dispatch (Supabase builders are thenables, void never calls .then())
+    admin.from('integration_message_logs').insert({
       user_id: ownerUserId,
       phone: sanitizedPhone,
       template_name: template_name ?? null,
@@ -75,7 +76,7 @@ export async function POST(request: NextRequest) {
       message_id: messageId,
       status,
       source: 'gilafstore',
-    })
+    }).then(() => {}, () => {})
 
     if (!messageId) {
       return NextResponse.json({ success: false, error: 'WhatsApp delivery failed' }, { status: 502 })

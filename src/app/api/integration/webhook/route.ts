@@ -314,9 +314,9 @@ async function handleOrderPlaced(admin: any, data: any, ownerUserId: string, add
   })
   addStep('Note', `Order #${order_id} noted`)
 
-  // Revenue attribution
+  // Revenue attribution — fire-and-forget .then() ensures dispatch (Supabase builders are thenables, void never calls .then())
   if (total && parseFloat(String(total)) > 0) {
-    void admin.from('integration_revenue_events').insert({
+    admin.from('integration_revenue_events').insert({
       user_id: ownerUserId,
       contact_id: contact.id,
       order_id: String(order_id),
@@ -324,7 +324,7 @@ async function handleOrderPlaced(admin: any, data: any, ownerUserId: string, add
       currency: 'INR',
       attributed_to: 'organic',
       phone: phone,
-    })
+    }).then(() => {}, () => {})
   }
 
   await ensureTag(admin, contact, 'customer')
@@ -488,7 +488,8 @@ async function handleTriggerOrderCreated(admin: any, data: any, ownerUserId: str
   addStep('Note', `Order #${order_id} noted`)
 
   if (total && parseFloat(String(total)) > 0) {
-    void admin.from('integration_revenue_events').insert({
+    // Fire-and-forget revenue attribution — .then() ensures dispatch
+    admin.from('integration_revenue_events').insert({
       user_id:      ownerUserId,
       contact_id:   contact.id,
       order_id:     String(order_id),
@@ -496,7 +497,7 @@ async function handleTriggerOrderCreated(admin: any, data: any, ownerUserId: str
       currency:     'INR',
       attributed_to: 'organic',
       phone,
-    })
+    }).then(() => {}, () => {})
   }
 
   await ensureTag(admin, contact, 'customer')

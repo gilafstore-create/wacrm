@@ -69,22 +69,22 @@ export async function POST(request: NextRequest) {
     dbStatus = `exception: ${err instanceof Error ? err.message : 'unknown'}`
   }
 
-  // Log heartbeat
-  void admin.from('heartbeat_logs').insert({
+  // Log heartbeat — fire-and-forget .then() ensures dispatch (Supabase builders are thenables, void never calls .then())
+  admin.from('heartbeat_logs').insert({
     user_id: record.user_id,
     status: 'ok',
     latency_ms: 0,
     render_online: true,
     db_online: dbStatus === 'connected',
     wa_online: waStatus === 'configured',
-  })
+  }).then(() => {}, () => {})
 
-  // Update heartbeat on any matching website_integrations for this user
-  void admin.from('website_integrations').update({
+  // Update heartbeat on any matching website_integrations for this user — fire-and-forget .then() ensures dispatch
+  admin.from('website_integrations').update({
     last_heartbeat_at:    new Date().toISOString(),
     heartbeat_latency_ms: 0,
     heartbeat_enabled:    true,
-  }).eq('user_id', record.user_id).eq('status', 'active')
+  }).eq('user_id', record.user_id).eq('status', 'active').then(() => {}, () => {})
 
   return NextResponse.json({
     success: true,
