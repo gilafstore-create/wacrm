@@ -184,8 +184,10 @@ export async function POST(request: NextRequest) {
     const finalStatus = r.ignored ? 'ignored' : r.success ? 'processed' : 'failed'
 
     // Update incoming_events with final result
+    // NOTE: must await — `void` on a Supabase thenable never invokes .then(),
+    // so the UPDATE would be silently skipped and events stay stuck in 'processing'.
     if (incomingEventId) {
-      void admin.from('incoming_events').update({
+      await admin.from('incoming_events').update({
         status:                 finalStatus,
         processing_duration_ms: duration,
         handler_used:           r.handler ?? null,
@@ -201,12 +203,14 @@ export async function POST(request: NextRequest) {
       }).eq('id', incomingEventId)
     }
 
-    // Update webhook log
-    void admin.from('integration_webhook_logs').update({
-      status: result.success ? 'delivered' : 'failed',
-      response_body: JSON.stringify(result),
-      completed_at: new Date().toISOString(),
-    }).eq('id', webhookLog?.id ?? '')
+    // Update webhook log (same await requirement)
+    if (webhookLog?.id) {
+      await admin.from('integration_webhook_logs').update({
+        status: result.success ? 'delivered' : 'failed',
+        response_body: JSON.stringify(result),
+        completed_at: new Date().toISOString(),
+      }).eq('id', webhookLog.id)
+    }
 
     return NextResponse.json({ success: true, event, result }, { status: 200 })
 
@@ -216,7 +220,7 @@ export async function POST(request: NextRequest) {
     if (incomingEventId) {
       try {
         const admin = supabaseAdmin()
-        void admin.from('incoming_events').update({
+        await admin.from('incoming_events').update({
           status: 'failed',
           processing_duration_ms: duration,
           error_message: String(err),
