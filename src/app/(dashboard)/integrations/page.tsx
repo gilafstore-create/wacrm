@@ -394,6 +394,8 @@ function IntegrationDetail({
   const [deliveries, setDeliveries] = useState<WebhookDelivery[]>([]);
   const [loadingDeliveries, setLoadingDeliveries] = useState(false);
   const [showSecret, setShowSecret] = useState(false);
+  const [regenLoading, setRegenLoading] = useState(false);
+  const [newToken, setNewToken] = useState<string | null>(null);
 
   const s = STATUS_CONFIG[intg.status] ?? STATUS_CONFIG.pending;
 
@@ -448,6 +450,27 @@ function IntegrationDetail({
       body: JSON.stringify({ id: intg.id, ...updates }),
     });
     onRefresh();
+  };
+
+  const regenToken = async () => {
+    if (!confirm("Generate a new connection token? The old token will stop working immediately.")) return;
+    setRegenLoading(true);
+    setNewToken(null);
+    try {
+      const r = await fetch("/api/integrations", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: intg.id, action: "regenerate_token" }),
+      });
+      const data = await r.json();
+      if (data.connection_token) {
+        setNewToken(data.connection_token);
+        onRefresh();
+      } else {
+        alert(data.error ?? "Failed to regenerate token");
+      }
+    } catch { alert("Network error"); }
+    setRegenLoading(false);
   };
 
   return (
@@ -705,6 +728,69 @@ function IntegrationDetail({
       {/* Settings Tab */}
       {tab === "settings" && (
         <div className="space-y-4">
+
+          {/* ── Connection Token Panel ── */}
+          <div className="rounded-lg border border-violet-500/30 bg-violet-500/5 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-200">Connection Token</p>
+                <p className="text-xs text-slate-500 mt-0.5">Paste this into GilafStore → Admin → WACRM Connection → Quick Connect</p>
+              </div>
+              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                intg.connection_token === "(used)"
+                  ? "border-amber-500/30 bg-amber-500/10 text-amber-400"
+                  : intg.connection_token
+                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+                  : "border-slate-700 bg-slate-800 text-slate-500"
+              }`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${
+                  intg.connection_token === "(used)" ? "bg-amber-400"
+                  : intg.connection_token ? "bg-emerald-400" : "bg-slate-500"
+                }`} />
+                {intg.connection_token === "(used)" ? "Used" : intg.connection_token ? "Active" : "None"}
+              </span>
+            </div>
+
+            {/* Show newly generated token immediately */}
+            {newToken ? (
+              <div className="space-y-2">
+                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
+                  <p className="mb-1.5 text-[11px] font-medium text-emerald-300">New token generated — copy now, shown once!</p>
+                  <div className="flex items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 py-2">
+                    <code className="flex-1 break-all font-mono text-xs text-emerald-300">{newToken}</code>
+                    <button onClick={() => copyText(newToken)} className="shrink-0 text-slate-500 hover:text-white" title="Copy token">
+                      <Copy className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2">
+                <code className="flex-1 truncate font-mono text-xs text-slate-400">
+                  {intg.connection_token === "(used)"
+                    ? "gs_connect_•••••••• (already activated)"
+                    : intg.connection_token
+                    ? intg.connection_token
+                    : "No token — regenerate below"}
+                </code>
+                {intg.connection_token && intg.connection_token !== "(used)" && (
+                  <button onClick={() => copyText(intg.connection_token ?? "")} className="shrink-0 text-slate-500 hover:text-white" title="Copy token">
+                    <Copy className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            )}
+
+            <button
+              onClick={regenToken}
+              disabled={regenLoading}
+              className="flex items-center gap-2 rounded-lg border border-violet-500/40 bg-violet-500/10 px-3 py-2 text-xs font-medium text-violet-300 hover:bg-violet-500/20 disabled:opacity-50"
+            >
+              {regenLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+              {regenLoading ? "Generating…" : "Generate New Token"}
+            </button>
+          </div>
+
           <div className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/40 px-4 py-3">
             <div>
               <p className="text-sm font-medium text-slate-200">Heartbeat / Keep Alive</p>

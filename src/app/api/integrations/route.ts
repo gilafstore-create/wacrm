@@ -186,9 +186,39 @@ export async function PUT(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await request.json()
-  const { id, ...updates } = body
+  const { id, action, ...updates } = body
 
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
+
+  // ── Special action: regenerate connection token ───────────────────────────
+  if (action === 'regenerate_token') {
+    const newToken = 'gs_connect_' + crypto.randomBytes(16).toString('hex')
+    const admin = adminClient()
+    const { error } = await admin
+      .from('website_integrations')
+      .update({
+        connection_token: newToken,
+        token_used_at: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .eq('user_id', user.id)
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    await writeAudit(admin, {
+      userId:         user.id,
+      actionType:     'token_regenerated',
+      actionCategory: 'integrations',
+      targetType:     'integration',
+      targetId:       id,
+      description:    'Connection token regenerated',
+      endpoint:       '/api/integrations',
+      method:         'PUT',
+    })
+
+    return NextResponse.json({ success: true, connection_token: newToken })
+  }
 
   // Never allow overwriting secrets via this route
   const safe = { ...updates }
