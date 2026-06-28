@@ -304,10 +304,12 @@ async function handleEvent(
 type StepFn = (step: string, detail?: string, ok?: boolean) => void
 
 async function handleOrderPlaced(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
+  data = flattenGilafStorePayload(data)
   const { order_id, customer_name, phone, email, total, items, payment_method } = data
+  addStep('Payload', `phone=${phone ?? 'none'} email=${email ?? 'none'} name=${customer_name ?? 'none'} total=${total ?? 'none'}`)
   const contact = await findOrCreateContact(admin, { name: customer_name, phone, email }, ownerUserId)
-  if (!contact) { addStep('Contact', 'Failed to create', false); return { success: false, error: 'Failed to create contact', handler: 'handleOrderPlaced' } }
-  addStep('Contact', `id=${contact.id}`)
+  if (!contact) { addStep('Contact', 'Failed to create — check phone/email in payload', false); return { success: false, error: 'Failed to create contact', handler: 'handleOrderPlaced' } }
+  addStep('Contact', `id=${contact.id} name=${contact.name}`)
 
   await admin.from('contact_notes').insert({
     contact_id: contact.id,
@@ -337,10 +339,12 @@ async function handleOrderPlaced(admin: any, data: any, ownerUserId: string, add
 }
 
 async function handleOrderStatusChange(admin: any, data: any, status: string, ownerUserId: string, addStep: StepFn = () => {}) {
+  data = flattenGilafStorePayload(data)
   const { order_id, phone, tracking_number, tracking_url } = data
+  addStep('Payload', `phone=${phone ?? 'none'} status=${status}`)
   const contact = await findContactByPhone(admin, phone, ownerUserId)
-  if (!contact) return { success: true, handler: 'handleOrderStatusChange', message: 'Contact not found, skipping' }
-  addStep('Contact', `id=${contact.id}`)
+  if (!contact) { addStep('Contact', `No contact for phone=${phone ?? 'none'}, skipping`, false); return { success: true, handler: 'handleOrderStatusChange', message: 'Contact not found, skipping' } }
+  addStep('Contact', `id=${contact.id} name=${contact.name}`)
 
   const statusMessages: Record<string, string> = {
     confirmed: `✅ Order #${order_id} confirmed`,
@@ -364,7 +368,9 @@ async function handleOrderStatusChange(admin: any, data: any, status: string, ow
 }
 
 async function handlePaymentSuccess(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
+  data = flattenGilafStorePayload(data)
   const { order_id, phone, amount } = data
+  addStep('Payload', `phone=${phone ?? 'none'} amount=${amount ?? 'none'}`)
   const contact = await findContactByPhone(admin, phone, ownerUserId)
   if (!contact) return { success: true, handler: 'handlePaymentSuccess', message: 'Contact not found' }
   addStep('Contact', `id=${contact.id}`)
@@ -380,6 +386,7 @@ async function handlePaymentSuccess(admin: any, data: any, ownerUserId: string, 
 }
 
 async function handlePaymentFailed(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
+  data = flattenGilafStorePayload(data)
   const { order_id, phone } = data
   const contact = await findContactByPhone(admin, phone, ownerUserId)
   if (!contact) return { success: true, handler: 'handlePaymentFailed', message: 'Contact not found' }
@@ -395,6 +402,7 @@ async function handlePaymentFailed(admin: any, data: any, ownerUserId: string, a
 }
 
 async function handleCartAbandoned(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
+  data = flattenGilafStorePayload(data)
   const { phone, email, cart_total, items, checkout_url } = data
   const contact = await findContactByPhone(admin, phone, ownerUserId)
   if (!contact) return { success: true, handler: 'handleCartAbandoned', message: 'Contact not found' }
@@ -486,15 +494,17 @@ async function handleOTPRequest(admin: any, data: any, ownerUserId: string, addS
 }
 
 async function handleTriggerOrderCreated(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
+  data = flattenGilafStorePayload(data)
   const { order_id, user_id, total, payment_method, customer_name, phone, email } = data
+  addStep('Payload', `phone=${phone ?? 'none'} email=${email ?? 'none'} name=${customer_name ?? 'none'} user_id=${user_id ?? 'none'} total=${total ?? 'none'}`)
 
   const contact = await findOrCreateContact(
     admin,
     { name: customer_name, phone, email, local_user_id: user_id },
     ownerUserId,
   )
-  if (!contact) { addStep('Contact', 'Failed to create', false); return { success: false, error: 'Failed to create/find contact', handler: 'handleTriggerOrderCreated' } }
-  addStep('Contact', `id=${contact.id}`)
+  if (!contact) { addStep('Contact', `Failed to create — phone=${phone ?? 'none'} email=${email ?? 'none'} user_id=${user_id ?? 'none'}`, false); return { success: false, error: 'Failed to create/find contact', handler: 'handleTriggerOrderCreated' } }
+  addStep('Contact', `id=${contact.id} name=${contact.name} phone=${contact.phone}`)
 
   const { error: orderErr } = await admin.from('crm_orders').upsert({
     user_id:     ownerUserId,
@@ -540,6 +550,7 @@ async function handleTriggerOrderCreated(admin: any, data: any, ownerUserId: str
 }
 
 async function handleTriggerPaymentSuccess(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
+  data = flattenGilafStorePayload(data)
   const { order_id, user_id, amount, method, phone } = data
 
   const contact = await findOrCreateContact(
@@ -640,6 +651,25 @@ async function handleCheckoutStarted(admin: any, data: any, ownerUserId: string,
   return { success: true, contact_id: contact.id, message: 'Checkout start tracked' }
 }
 
+// ── Helper: normalise GilafStore nested payload ─────────────────────────────
+// WACRMPublisher.php::buildOrderPayload() nests customer data inside a
+// 'customer' key. Older / custom payloads may use flat top-level fields.
+// This function normalises BOTH into a single flat shape so every handler
+// can destructure consistently regardless of which format was sent.
+function flattenGilafStorePayload(data: any): any {
+  const c = data.customer ?? {}
+  return {
+    ...data,
+    // Customer identity — top-level fields take priority (backward compat)
+    phone:         data.phone         ?? c.phone    ?? null,
+    email:         data.email         ?? c.email    ?? null,
+    customer_name: data.customer_name ?? c.name     ?? null,
+    user_id:       data.user_id       ?? c.user_id  ?? null,
+    // Amount field — PHP sends total_amount, some callers send total
+    total:         data.total         ?? data.total_amount ?? null,
+  }
+}
+
 // ── Helper: find contact by phone (user scoped) ───────────────────────────────
 async function findContactByPhone(admin: any, phone: string, ownerUserId: string) {
   if (!phone) return null
@@ -677,14 +707,19 @@ async function findOrCreateContact(
   }
 
   // Create new contact
-  const { data: newContact } = await admin.from('contacts').insert({
+  const insertPayload = {
     user_id: ownerUserId,
     name: info.name ?? info.phone ?? 'Unknown',
     phone: info.phone ?? null,
     email: info.email ?? null,
     external_id: info.local_user_id ? String(info.local_user_id) : null,
-  }).select().maybeSingle()
+  }
+  console.log('[findOrCreateContact] creating:', { phone: insertPayload.phone, email: insertPayload.email, external_id: insertPayload.external_id, name: insertPayload.name })
+  const { data: newContact, error: insertErr } = await admin.from('contacts').insert(insertPayload).select().maybeSingle()
 
+  if (insertErr) {
+    console.error('[findOrCreateContact] insert failed:', insertErr.message, insertErr.code, { phone: info.phone, email: info.email, local_user_id: info.local_user_id })
+  }
   return newContact
 }
 
