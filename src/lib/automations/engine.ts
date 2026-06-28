@@ -357,6 +357,13 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         ? Object.keys(cfg.header_variables).sort(numericSort)
             .map((k) => interpolate(String(cfg.header_variables![k]), args))
         : []
+      // Resolve button_variables: { "0": "{{otp_code}}", "1": "{{code}}" }
+      const buttonParams: Record<number, string> = {}
+      if (cfg.button_variables) {
+        for (const [k, v] of Object.entries(cfg.button_variables)) {
+          buttonParams[Number(k)] = interpolate(String(v), args)
+        }
+      }
       // Pre-send validation — log empty params so users can diagnose mapping issues
       const emptyBody = params.reduce<number[]>((acc, p, i) => (!p.trim() ? [...acc, i + 1] : acc), [])
       const emptyHdr  = headerParams.reduce<number[]>((acc, p, i) => (!p.trim() ? [...acc, i + 1] : acc), [])
@@ -369,7 +376,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
           header_variables: cfg.header_variables,
         })
       }
-      console.log('[engine] send_template params:', params, 'headerParams:', headerParams, 'conversationId:', conversationId)
+      console.log('[engine] send_template params:', params, 'headerParams:', headerParams, 'buttonParams:', buttonParams, 'conversationId:', conversationId)
       const { whatsapp_message_id } = await engineSendTemplate({
         userId: args.automation.user_id,
         conversationId,
@@ -378,6 +385,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         language: cfg.language,
         params,
         headerParams,
+        buttonParams: Object.keys(buttonParams).length ? buttonParams : undefined,
       })
       console.log('[engine] send_template success, waMessageId:', whatsapp_message_id)
       return `template sent via Meta (${whatsapp_message_id})`

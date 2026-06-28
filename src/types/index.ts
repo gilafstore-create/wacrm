@@ -364,6 +364,7 @@ export interface SendTemplateStepConfig {
   language?: string;
   variables?: Record<string, string>;
   header_variables?: Record<string, string>;
+  button_variables?: Record<string, string>;
   _body_text?: string | null;
   _header_content?: string | null;
   _header_type?: string | null;

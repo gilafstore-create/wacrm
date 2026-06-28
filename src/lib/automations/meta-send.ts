@@ -34,6 +34,7 @@ interface SendTemplateArgs {
   language?: string
   params?: string[]
   headerParams?: string[]  // resolved header text variable values (e.g. customer name)
+  buttonParams?: Record<number, string>  // resolved URL/COPY_CODE button variable values keyed by button index
 }
 
 export async function engineSendText(args: SendTextArgs): Promise<{ whatsapp_message_id: string }> {
@@ -139,6 +140,7 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
         messageParams: {
           body: input.params ?? [],
           headerText,
+          buttonParams: input.buttonParams,
         },
         params: input.params,
       })
