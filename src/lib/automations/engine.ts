@@ -518,7 +518,6 @@ async function resolveConversationId(args: ExecuteArgs): Promise<string> {
       user_id: args.automation.user_id,
       contact_id: args.contactId,
       status: 'open',
-      channel: 'whatsapp',
     })
     .select('id')
     .single()
