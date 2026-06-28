@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import {
@@ -741,7 +741,14 @@ function StepEditor({
           <TemplateDropdown
             value={(cfg.template_name as string) ?? ""}
             language={(cfg.language as string) ?? "en_US"}
-            onChange={(name, lang) => set({ template_name: name, language: lang })}
+            onChange={(name, lang, meta) =>
+              set({ template_name: name, language: lang, _body_text: meta?.body_text ?? null })
+            }
+          />
+          <VariableInputs
+            bodyText={(cfg._body_text as string | null | undefined) ?? null}
+            variables={cfg.variables as Record<string, string> | undefined}
+            onChange={(vars) => set({ variables: vars })}
           />
           <VariableMappingRef />
         </>
@@ -953,7 +960,7 @@ function TemplateDropdown({
 }: {
   value: string
   language: string
-  onChange: (name: string, language: string) => void
+  onChange: (name: string, language: string, meta: TemplateMeta | null) => void
 }) {
   const [templates, setTemplates] = useState<TemplateMeta[]>([])
   const [loading, setLoading] = useState(false)
@@ -1025,7 +1032,7 @@ function TemplateDropdown({
                 <li key={`${t.name}__${t.language}`}>
                   <button
                     type="button"
-                    onClick={() => { onChange(t.name, t.language); setOpen(false); setSearch("") }}
+                    onClick={() => { onChange(t.name, t.language, t); setOpen(false); setSearch("") }}
                     className={cn(
                       "w-full px-3 py-2 text-left hover:bg-slate-800 transition-colors",
                       t.name === value && t.language === language && "bg-primary/10",
@@ -1048,6 +1055,68 @@ function TemplateDropdown({
       {selected?.body_text && (
         <p className="mt-1 text-[11px] text-slate-500 line-clamp-2">{selected.body_text}</p>
       )}
+    </div>
+  )
+}
+
+// ------------------------------------------------------------
+// Variable mapping inputs
+// ------------------------------------------------------------
+
+const DEFAULT_VAR_HINTS: Record<string, string> = {
+  "1": "{{order_id}}",
+  "2": "{{total}}",
+  "3": "3-5 business days",
+  "4": "{{customer_name}}",
+  "5": "{{otp}}",
+}
+
+function VariableInputs({
+  bodyText,
+  variables,
+  onChange,
+}: {
+  bodyText: string | null | undefined
+  variables: Record<string, string> | undefined
+  onChange: (vars: Record<string, string>) => void
+}) {
+  const extractedKeys = useMemo(() => {
+    if (!bodyText) return null
+    const matches = [...bodyText.matchAll(/\{\{(\d+)\}\}/g)]
+    const unique = [...new Set(matches.map((m) => m[1]))]
+    return unique.sort((a, b) => Number(a) - Number(b))
+  }, [bodyText])
+
+  const keys =
+    extractedKeys ??
+    (variables ? Object.keys(variables).sort((a, b) => Number(a) - Number(b)) : [])
+
+  if (keys.length === 0) return null
+
+  const vars = variables ?? {}
+
+  return (
+    <div className="mb-2 last:mb-0">
+      <label className="mb-1 block text-xs font-medium text-slate-400">Variable Mapping</label>
+      <div className="rounded-md border border-slate-700 bg-slate-800/50 p-2 space-y-1.5">
+        <p className="text-[10px] text-slate-500">
+          Map each {"{{N}}"} to a payload field (e.g. {"{{order_id}}"})
+        </p>
+        {keys.map((n) => (
+          <div key={n} className="flex items-center gap-2">
+            <code className="flex-shrink-0 rounded bg-slate-700 px-1.5 py-0.5 text-[11px] font-mono text-primary">
+              {`{{${n}}}`}
+            </code>
+            <input
+              type="text"
+              value={vars[n] ?? ""}
+              onChange={(e) => onChange({ ...vars, [n]: e.target.value })}
+              placeholder={DEFAULT_VAR_HINTS[n] ?? `value for {{${n}}}`}
+              className="flex-1 rounded border border-slate-700 bg-slate-800 px-2 py-0.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-primary"
+            />
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

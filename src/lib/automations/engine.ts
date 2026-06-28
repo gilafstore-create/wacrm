@@ -321,6 +321,14 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
 
     case 'send_template': {
       const cfg = step.step_config as SendTemplateStepConfig
+      console.log('[engine] send_template step:', {
+        contactId: args.contactId,
+        template_name: cfg.template_name,
+        language: cfg.language,
+        variables: cfg.variables,
+        triggerEvent: args.triggerEvent,
+        contextVarsKeys: Object.keys(args.context.vars ?? {}),
+      })
       if (!args.contactId) throw new Error('send_template needs a contact')
       if (!cfg.template_name) {
         throw new Error(
@@ -347,6 +355,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
             })
             .map((k) => interpolate(String(cfg.variables![k]), args))
         : []
+      console.log('[engine] send_template params:', params, 'conversationId:', conversationId)
       const { whatsapp_message_id } = await engineSendTemplate({
         userId: args.automation.user_id,
         conversationId,
@@ -355,6 +364,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         language: cfg.language,
         params,
       })
+      console.log('[engine] send_template success, waMessageId:', whatsapp_message_id)
       return `template sent via Meta (${whatsapp_message_id})`
     }
 

@@ -71,9 +71,18 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
   }
 
   const sanitized = sanitizePhoneForMeta(contact.phone)
-  if (!isValidE164(sanitized)) {
-    throw new Error(`contact phone invalid: ${contact.phone}`)
+  // Auto-prepend Indian country code (91) for 10-digit mobile numbers.
+  // GilafStore stores phone as '8825041655' (10 digits, no country code).
+  // Meta API requires full international format: '918825041655'.
+  // Indian mobile numbers start with 6, 7, 8, or 9.
+  const phoneForMeta =
+    sanitized.length === 10 && /^[6-9]/.test(sanitized) ? '91' + sanitized : sanitized
+  if (!isValidE164(phoneForMeta)) {
+    throw new Error(
+      `contact phone invalid for Meta API: stored="${contact.phone}" normalized="${phoneForMeta}"`,
+    )
   }
+  console.log('[meta-send] phone:', contact.phone, '→', phoneForMeta)
 
   const { data: config, error: configErr } = await db
     .from('whatsapp_config')
@@ -88,6 +97,12 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
 
   const attempt = async (phone: string): Promise<string> => {
     if (input.kind === 'template') {
+      console.log('[meta-send] sendTemplate:', {
+        templateName: input.templateName,
+        language: input.language,
+        params: input.params,
+        to: phone,
+      })
       const r = await sendTemplateMessage({
         phoneNumberId: config.phone_number_id,
         accessToken,
@@ -96,6 +111,7 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
         language: input.language,
         params: input.params,
       })
+      console.log('[meta-send] sendTemplate success, messageId:', r.messageId)
       return r.messageId
     }
     const r = await sendTextMessage({
@@ -110,8 +126,8 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
   // Same phone-variant retry as /api/whatsapp/send — Meta sandbox and
   // numbers registered with/without a trunk 0 both require this to
   // reliably land a message.
-  const variants = phoneVariants(sanitized)
-  let workingPhone = sanitized
+  const variants = phoneVariants(phoneForMeta)
+  let workingPhone = phoneForMeta
   let waMessageId = ''
   let lastError: unknown = null
   for (const v of variants) {
