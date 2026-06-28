@@ -244,7 +244,7 @@ const KNOWN_HANDLERS = [
   'cart.abandoned','cart.recovered','customer.created','customer.updated','customer.registered',
   'customer.login','customer.otp_request','trigger.order_created','trigger.payment_success',
   'contact.tag_added','product.viewed','checkout.started',
-  'refund.initiated','refund.completed',
+  'refund.initiated','refund.completed','login.otp',
 ]
 
 // Event dispatcher
@@ -282,6 +282,7 @@ async function handleEvent(
     case 'checkout.started':      addStep('Handler', 'handleCheckoutStarted');          return handleCheckoutStarted(admin, data, ownerUserId, addStep)
     case 'refund.initiated':      addStep('Handler', 'handleRefundInitiated');          return handleRefundInitiated(admin, data, ownerUserId, addStep)
     case 'refund.completed':      addStep('Handler', 'handleRefundCompleted');          return handleRefundCompleted(admin, data, ownerUserId, addStep)
+    case 'login.otp':             addStep('Handler', 'handleLoginOTP');                 return handleLoginOTP(admin, data, ownerUserId, addStep)
 
     default: {
       console.log(`[integration/webhook] Unknown event: ${event}`)
@@ -497,6 +498,37 @@ async function handleOTPRequest(admin: any, data: any, ownerUserId: string, addS
   await triggerAutomation(admin, contact, 'login_otp', { phone, otp, purpose: purpose ?? 'login', expiry_minutes: expiry_minutes ?? 5, name: contact.name ?? '' })
   addStep('Automation', `login_otp triggered (purpose=${purpose ?? 'login'})`)
   return { success: true, contact_id: contact.id, handler: 'handleOTPRequest' }
+}
+
+async function handleLoginOTP(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
+  // Normalise both nested { customer: { phone }, otp: { code } } and legacy flat formats
+  const phone     = data.customer?.phone ?? data.phone
+  const otp_code  = data.otp?.code ?? (typeof data.otp === 'string' ? data.otp : null) ?? data.otp_code
+  const purpose   = data.purpose ?? 'login'
+  const name      = data.customer?.name ?? data.name ?? ''
+  const expiry    = data.otp?.expiry ?? (data.expiry_minutes ? data.expiry_minutes * 60 : 300)
+
+  addStep('Payload', `phone=${phone ?? 'none'} purpose=${purpose}`)
+
+  if (!phone) return { success: false, error: 'No phone in login.otp payload', handler: 'handleLoginOTP' }
+
+  const contact = await findOrCreateContact(admin, { phone, name }, ownerUserId)
+  if (!contact) {
+    addStep('Contact', 'Failed to find/create contact', false)
+    return { success: false, error: 'Failed to find contact for OTP delivery', handler: 'handleLoginOTP' }
+  }
+  addStep('Contact', `id=${contact.id}`)
+
+  await triggerAutomation(admin, contact, 'login_otp', {
+    otp_code,
+    otp:            otp_code,     // both keys for template variable flexibility
+    phone,
+    purpose,
+    expiry_seconds: expiry,
+    name:           contact.name ?? name,
+  })
+  addStep('Automation', `login_otp triggered (purpose=${purpose})`)
+  return { success: true, contact_id: contact.id, handler: 'handleLoginOTP' }
 }
 
 async function handleTriggerOrderCreated(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
