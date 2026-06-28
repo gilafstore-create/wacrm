@@ -357,6 +357,18 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         ? Object.keys(cfg.header_variables).sort(numericSort)
             .map((k) => interpolate(String(cfg.header_variables![k]), args))
         : []
+      // Pre-send validation — log empty params so users can diagnose mapping issues
+      const emptyBody = params.reduce<number[]>((acc, p, i) => (!p.trim() ? [...acc, i + 1] : acc), [])
+      const emptyHdr  = headerParams.reduce<number[]>((acc, p, i) => (!p.trim() ? [...acc, i + 1] : acc), [])
+      if (emptyBody.length || emptyHdr.length) {
+        console.warn('[engine] send_template: empty params detected', {
+          emptyBodyPositions: emptyBody,
+          emptyHeaderPositions: emptyHdr,
+          availableVarKeys: Object.keys(args.context.vars ?? {}),
+          variables: cfg.variables,
+          header_variables: cfg.header_variables,
+        })
+      }
       console.log('[engine] send_template params:', params, 'headerParams:', headerParams, 'conversationId:', conversationId)
       const { whatsapp_message_id } = await engineSendTemplate({
         userId: args.automation.user_id,
@@ -582,33 +594,51 @@ function waitMs(cfg: WaitStepConfig): number {
 }
 
 function interpolate(s: string, args: ExecuteArgs): string {
-  // First pass: double braces {{var}} or {{namespace.var}}
+  const vars = args.context.vars ?? {}
+
+  // First pass: double braces {{var}} or {{a.b.c}} paths
   let result = s.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, key) => {
-    const [ns, prop] = String(key).split('.')
-    
-    // Support {{message.text}}
-    if (ns === 'message' && prop === 'text') {
-      return String(args.context.message_text ?? '')
+    const trimmed = String(key).trim()
+
+    // 1. Special: {{message.text}}
+    if (trimmed === 'message.text') return String(args.context.message_text ?? '')
+
+    // 2. {{vars.prop}} namespace
+    if (trimmed.startsWith('vars.')) return String(vars[trimmed.slice(5)] ?? '')
+
+    // 3. Exact flat key: {{order_id}}, {{customer_name}}, etc.
+    if (Object.prototype.hasOwnProperty.call(vars, trimmed)) {
+      const v = vars[trimmed]
+      if (v !== null && v !== undefined) return String(v)
     }
-    
-    // Support {{vars.property}}
-    if (ns === 'vars' && prop) {
-      return String(args.context.vars?.[prop] ?? '')
+
+    // 4. Dotted path traversal: {{customer.name}} → vars.customer.name
+    if (trimmed.includes('.')) {
+      const parts = trimmed.split('.')
+      let obj: unknown = vars
+      for (const part of parts) {
+        if (obj != null && typeof obj === 'object') {
+          obj = (obj as Record<string, unknown>)[part]
+        } else { obj = undefined; break }
+      }
+      if (obj !== null && obj !== undefined) return String(obj)
+
+      // 5. Underscore fallback: {{customer.name}} → {{customer_name}}
+      const underKey = parts.join('_')
+      if (Object.prototype.hasOwnProperty.call(vars, underKey)) {
+        const v = vars[underKey]
+        if (v !== null && v !== undefined) return String(v)
+      }
     }
-    
-    // Support {{property}} without namespace (fallback to vars)
-    if (!prop && args.context.vars?.[ns]) {
-      return String(args.context.vars[ns])
-    }
-    
+
     return ''
   })
-  
+
   // Second pass: single braces {var} for backward compatibility
   result = result.replace(/\{(\w+)\}/g, (_, key) => {
-    return String(args.context.vars?.[key] ?? `{${key}}`)
+    return String(vars[key] ?? `{${key}}`)
   })
-  
+
   return result
 }
 

@@ -84,6 +84,14 @@ export const TRIGGER_META: Record<AutomationTriggerType, TriggerMeta> = {
     label: 'Login OTP',
     pillClass: 'border-violet-500/30 bg-violet-500/10 text-violet-300',
   },
+  refund_initiated: {
+    label: 'Refund Initiated',
+    pillClass: 'border-orange-500/30 bg-orange-500/10 text-orange-300',
+  },
+  refund_completed: {
+    label: 'Refund Completed',
+    pillClass: 'border-orange-500/30 bg-orange-500/10 text-orange-300',
+  },
 }
 
 export function triggerMeta(t: AutomationTriggerType | string): TriggerMeta {

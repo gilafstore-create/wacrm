@@ -312,7 +312,9 @@ export type AutomationTriggerType =
   | 'cart_abandoned'
   | 'customer_created'
   | 'customer_registered'
-  | 'login_otp';
+  | 'login_otp'
+  | 'refund_initiated'
+  | 'refund_completed';
 
 
 export type AutomationStepType =

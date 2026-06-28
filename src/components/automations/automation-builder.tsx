@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef, useMemo } from "react"
+import { getFieldsForTrigger } from "@/lib/automations/payload-fields"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import {
@@ -129,6 +130,8 @@ const TRIGGER_OPTIONS: { value: AutomationTriggerType; label: string; hint: stri
   { value: "customer_created", label: "Customer Created", hint: "When a new customer is created" },
   { value: "customer_registered", label: "Customer Registered", hint: "When a customer registers an account" },
   { value: "login_otp", label: "Login OTP", hint: "When a customer requests a login OTP" },
+  { value: "refund_initiated", label: "Refund Initiated", hint: "When a refund is requested by the customer" },
+  { value: "refund_completed", label: "Refund Completed", hint: "When a refund has been processed successfully" },
 ]
 
 function cid(): string {
@@ -314,6 +317,7 @@ export function AutomationBuilder({ initial }: { initial: BuilderInitial }) {
             addStepAt={addStepAt}
             deleteStepAt={deleteStepAt}
             moveStepAt={moveStepAt}
+            triggerType={state.trigger_type}
           />
         </div>
       </div>
@@ -481,6 +485,7 @@ interface StepListProps {
   addStepAt: (parent: ParentScope, index: number, type: AutomationStepType) => void
   deleteStepAt: (path: StepPath) => void
   moveStepAt: (path: StepPath, direction: -1 | 1) => void
+  triggerType?: AutomationTriggerType
 }
 
 function StepList(props: StepListProps) {
@@ -577,6 +582,7 @@ function StepRenderer({
               <StepEditor
                 step={step}
                 onChange={(next) => props.updateStep(path, () => next)}
+                triggerType={props.triggerType}
               />
               <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-800 pt-3">
                 <div className="flex gap-1">
@@ -715,9 +721,11 @@ function AddButton({ onPick }: { onPick: (t: AutomationStepType) => void }) {
 function StepEditor({
   step,
   onChange,
+  triggerType,
 }: {
   step: BuilderStep
   onChange: (s: BuilderStep) => void
+  triggerType?: AutomationTriggerType
 }) {
   const cfg = step.step_config
   const set = (patch: Record<string, unknown>) =>
@@ -765,6 +773,8 @@ function StepEditor({
                 bodyText={(cfg._header_content as string | null | undefined) ?? null}
                 variables={cfg.header_variables as Record<string, string> | undefined}
                 onChange={(vars) => set({ header_variables: vars })}
+                triggerType={triggerType as string | undefined}
+                listId="header-vars-list"
               />
             </>
           )}
@@ -772,6 +782,8 @@ function StepEditor({
             bodyText={(cfg._body_text as string | null | undefined) ?? null}
             variables={cfg.variables as Record<string, string> | undefined}
             onChange={(vars) => set({ variables: vars })}
+            triggerType={triggerType as string | undefined}
+            listId="body-vars-list"
           />
           <VariableMappingRef />
         </>
@@ -1109,10 +1121,14 @@ function VariableInputs({
   bodyText,
   variables,
   onChange,
+  triggerType,
+  listId = "payload-fields-list",
 }: {
   bodyText: string | null | undefined
   variables: Record<string, string> | undefined
   onChange: (vars: Record<string, string>) => void
+  triggerType?: string
+  listId?: string
 }) {
   const extractedKeys = useMemo(() => {
     if (!bodyText) return null
@@ -1120,6 +1136,11 @@ function VariableInputs({
     const unique = [...new Set(matches.map((m) => m[1]))]
     return unique.sort((a, b) => Number(a) - Number(b))
   }, [bodyText])
+
+  const fieldSuggestions = useMemo(
+    () => getFieldsForTrigger(triggerType).map((f) => `{{${f.key}}}`),
+    [triggerType],
+  )
 
   const keys =
     extractedKeys ??
@@ -1132,9 +1153,14 @@ function VariableInputs({
   return (
     <div className="mb-2 last:mb-0">
       <label className="mb-1 block text-xs font-medium text-slate-400">Variable Mapping</label>
+      <datalist id={listId}>
+        {fieldSuggestions.map((opt) => (
+          <option key={opt} value={opt} />
+        ))}
+      </datalist>
       <div className="rounded-md border border-slate-700 bg-slate-800/50 p-2 space-y-1.5">
         <p className="text-[10px] text-slate-500">
-          Map each {"{{N}}"} to a payload field (e.g. {"{{order_id}}"})
+          Map each {"{{N}}"} to a payload field — type or pick from dropdown
         </p>
         {keys.map((n) => (
           <div key={n} className="flex items-center gap-2">
@@ -1143,9 +1169,10 @@ function VariableInputs({
             </code>
             <input
               type="text"
+              list={listId}
               value={vars[n] ?? ""}
               onChange={(e) => onChange({ ...vars, [n]: e.target.value })}
-              placeholder={DEFAULT_VAR_HINTS[n] ?? `value for {{${n}}}`}
+              placeholder={DEFAULT_VAR_HINTS[n] ?? `{{field_key}} or static value`}
               className="flex-1 rounded border border-slate-700 bg-slate-800 px-2 py-0.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-primary"
             />
           </div>

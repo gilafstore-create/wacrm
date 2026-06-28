@@ -244,6 +244,7 @@ const KNOWN_HANDLERS = [
   'cart.abandoned','cart.recovered','customer.created','customer.updated','customer.registered',
   'customer.login','customer.otp_request','trigger.order_created','trigger.payment_success',
   'contact.tag_added','product.viewed','checkout.started',
+  'refund.initiated','refund.completed',
 ]
 
 // Event dispatcher
@@ -279,6 +280,8 @@ async function handleEvent(
     case 'contact.tag_added':     addStep('Handler', 'handleContactTagAdded');          return handleContactTagAdded(admin, data, ownerUserId, addStep)
     case 'product.viewed':        addStep('Handler', 'handleProductViewed');            return handleProductViewed(admin, data, ownerUserId, addStep)
     case 'checkout.started':      addStep('Handler', 'handleCheckoutStarted');          return handleCheckoutStarted(admin, data, ownerUserId, addStep)
+    case 'refund.initiated':      addStep('Handler', 'handleRefundInitiated');          return handleRefundInitiated(admin, data, ownerUserId, addStep)
+    case 'refund.completed':      addStep('Handler', 'handleRefundCompleted');          return handleRefundCompleted(admin, data, ownerUserId, addStep)
 
     default: {
       console.log(`[integration/webhook] Unknown event: ${event}`)
@@ -657,6 +660,46 @@ async function handleCheckoutStarted(admin: any, data: any, ownerUserId: string,
   return { success: true, contact_id: contact.id, message: 'Checkout start tracked' }
 }
 
+async function handleRefundInitiated(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
+  data = flattenGilafStorePayload(data)
+  const { order_id, customer_name, phone, email, refund_amount, refund_id } = data
+  addStep('Payload', `phone=${phone ?? 'none'} refund_amount=${refund_amount ?? 'none'} refund_id=${refund_id ?? 'none'}`)
+  const contact = await findOrCreateContact(admin, { name: customer_name, phone, email }, ownerUserId)
+  if (!contact) {
+    addStep('Contact', 'Failed to create/find — check phone/email in payload', false)
+    return { success: false, error: 'Failed to create contact', handler: 'handleRefundInitiated' }
+  }
+  addStep('Contact', `id=${contact.id}`)
+  await admin.from('contact_notes').insert({
+    contact_id: contact.id,
+    user_id:    ownerUserId,
+    content:    `↩️ Refund initiated for Order #${order_id} — ₹${refund_amount} (${refund_id ?? 'no refund ID'})`,
+    type:       'system',
+  })
+  await triggerAutomation(admin, contact, 'refund_initiated', data)
+  return { success: true, contact_id: contact.id, order_id, handler: 'handleRefundInitiated' }
+}
+
+async function handleRefundCompleted(admin: any, data: any, ownerUserId: string, addStep: StepFn = () => {}) {
+  data = flattenGilafStorePayload(data)
+  const { order_id, customer_name, phone, email, refund_amount, refund_id } = data
+  addStep('Payload', `phone=${phone ?? 'none'} refund_amount=${refund_amount ?? 'none'} refund_id=${refund_id ?? 'none'}`)
+  const contact = await findOrCreateContact(admin, { name: customer_name, phone, email }, ownerUserId)
+  if (!contact) {
+    addStep('Contact', 'Failed to create/find — check phone/email in payload', false)
+    return { success: false, error: 'Failed to create contact', handler: 'handleRefundCompleted' }
+  }
+  addStep('Contact', `id=${contact.id}`)
+  await admin.from('contact_notes').insert({
+    contact_id: contact.id,
+    user_id:    ownerUserId,
+    content:    `✅ Refund completed for Order #${order_id} — ₹${refund_amount} (${refund_id ?? 'no refund ID'})`,
+    type:       'system',
+  })
+  await triggerAutomation(admin, contact, 'refund_completed', data)
+  return { success: true, contact_id: contact.id, order_id, handler: 'handleRefundCompleted' }
+}
+
 // ── Helper: normalise GilafStore nested payload ─────────────────────────────
 // WACRMPublisher.php::buildOrderPayload() nests customer data inside a
 // 'customer' key. Older / custom payloads may use flat top-level fields.
@@ -667,12 +710,24 @@ function flattenGilafStorePayload(data: any): any {
   return {
     ...data,
     // Customer identity — top-level fields take priority (backward compat)
-    phone:         data.phone         ?? c.phone    ?? null,
-    email:         data.email         ?? c.email    ?? null,
-    customer_name: data.customer_name ?? c.name     ?? null,
-    user_id:       data.user_id       ?? c.user_id  ?? null,
-    // Amount field — PHP sends total_amount, some callers send total
-    total:         data.total         ?? data.total_amount ?? null,
+    phone:           data.phone           ?? c.phone    ?? null,
+    email:           data.email           ?? c.email    ?? null,
+    customer_name:   data.customer_name   ?? c.name     ?? null,
+    user_id:         data.user_id         ?? c.user_id  ?? null,
+    // Amount — PHP sends total_amount; some callers send total
+    total:           data.total           ?? data.total_amount ?? null,
+    // Refund
+    refund_amount:   data.refund_amount   ?? null,
+    refund_id:       data.refund_id       ?? data.razorpay_refund_id ?? null,
+    // Shipping
+    tracking_number: data.tracking_number ?? data.tracking_id ?? data.awb ?? null,
+    carrier:         data.carrier         ?? data.courier ?? null,
+    // OTP
+    otp_code:        data.otp_code        ?? data.otp ?? null,
+    otp_expires_at:  data.otp_expires_at  ?? null,
+    // Cart
+    cart_total:      data.cart_total      ?? data.subtotal ?? null,
+    cart_url:        data.cart_url        ?? data.recovery_url ?? null,
   }
 }
 
