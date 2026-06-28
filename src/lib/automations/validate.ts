@@ -135,6 +135,14 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
     case 'close_conversation':
       // No config required.
       break
+    case 'send_interactive_menu':
+      if (!nonEmpty(c.body)) {
+        issues.push({ path: `${path}.body`, message: 'menu body text is required' })
+      }
+      if (!Array.isArray(c.options) || c.options.length === 0) {
+        issues.push({ path: `${path}.options`, message: 'at least one menu option is required' })
+      }
+      break
     default:
       issues.push({ path, message: `unknown step type: ${step.step_type}` })
   }
