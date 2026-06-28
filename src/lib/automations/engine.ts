@@ -62,7 +62,13 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<vo
       console.error('[automations] fetch failed:', error)
       return
     }
-    if (!automations || automations.length === 0) return
+    if (!automations || automations.length === 0) {
+      console.warn(
+        `[automations] No active automation found for trigger: ${input.triggerType} (user: ${input.userId}). ` +
+        `Create an automation in the WACRM dashboard with this trigger type to send messages.`,
+      )
+      return
+    }
 
     for (const automation of automations as Automation[]) {
       if (!triggerMatches(automation, input.context)) continue
@@ -316,7 +322,12 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
     case 'send_template': {
       const cfg = step.step_config as SendTemplateStepConfig
       if (!args.contactId) throw new Error('send_template needs a contact')
-      if (!cfg.template_name) throw new Error('send_template needs template_name')
+      if (!cfg.template_name) {
+        throw new Error(
+          `No template mapped for trigger: ${args.triggerEvent}. ` +
+          `Add a Send Template step and select an approved template in the automation builder.`,
+        )
+      }
       const conversationId = await resolveConversationId(args)
       // Meta templates use positional {{1}}, {{2}}, … placeholders, so
       // we MUST emit params in strict numeric order. Lexicographic sort

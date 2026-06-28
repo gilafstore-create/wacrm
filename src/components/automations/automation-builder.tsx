@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import {
@@ -128,6 +128,7 @@ const TRIGGER_OPTIONS: { value: AutomationTriggerType; label: string; hint: stri
   { value: "cart_abandoned", label: "Cart Abandoned", hint: "When a checkout is abandoned" },
   { value: "customer_created", label: "Customer Created", hint: "When a new customer is created" },
   { value: "customer_registered", label: "Customer Registered", hint: "When a customer registers an account" },
+  { value: "login_otp", label: "Login OTP", hint: "When a customer requests a login OTP" },
 ]
 
 function cid(): string {
@@ -737,20 +738,12 @@ function StepEditor({
     case "send_template":
       return (
         <>
-          <FieldBlock label="Template name">
-            <Input
-              value={(cfg.template_name as string) ?? ""}
-              onChange={(e) => set({ template_name: e.target.value })}
-              className="bg-slate-800 text-white"
-            />
-          </FieldBlock>
-          <FieldBlock label="Language">
-            <Input
-              value={(cfg.language as string) ?? ""}
-              onChange={(e) => set({ language: e.target.value })}
-              className="bg-slate-800 text-white"
-            />
-          </FieldBlock>
+          <TemplateDropdown
+            value={(cfg.template_name as string) ?? ""}
+            language={(cfg.language as string) ?? "en_US"}
+            onChange={(name, lang) => set({ template_name: name, language: lang })}
+          />
+          <VariableMappingRef />
         </>
       )
     case "add_tag":
@@ -940,6 +933,164 @@ function StepEditor({
     default:
       return null
   }
+}
+
+// ------------------------------------------------------------
+// Template dropdown — fetches APPROVED message_templates from DB
+// ------------------------------------------------------------
+
+interface TemplateMeta {
+  name: string
+  language: string
+  body_text: string | null
+  sample_values: string[] | null
+}
+
+function TemplateDropdown({
+  value,
+  language,
+  onChange,
+}: {
+  value: string
+  language: string
+  onChange: (name: string, language: string) => void
+}) {
+  const [templates, setTemplates] = useState<TemplateMeta[]>([])
+  const [loading, setLoading] = useState(false)
+  const [search, setSearch] = useState("")
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    setLoading(true)
+    fetch("/api/whatsapp/templates/list")
+      .then((r) => r.ok ? r.json() : { templates: [] })
+      .then((data) => setTemplates(data.templates ?? []))
+      .catch(() => setTemplates([]))
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
+    function handleOutside(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener("mousedown", handleOutside)
+    return () => document.removeEventListener("mousedown", handleOutside)
+  }, [])
+
+  const filtered = templates.filter(
+    (t) =>
+      !search ||
+      t.name.toLowerCase().includes(search.toLowerCase()) ||
+      (t.body_text ?? "").toLowerCase().includes(search.toLowerCase()),
+  )
+
+  const selected = templates.find((t) => t.name === value && t.language === language)
+
+  return (
+    <div className="mb-2 last:mb-0" ref={containerRef}>
+      <label className="mb-1 block text-xs font-medium text-slate-400">Template</label>
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex w-full items-center justify-between rounded-md border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-left text-white focus:border-primary focus:outline-none"
+        >
+          <span className={value ? "text-white" : "text-slate-500"}>
+            {loading ? "Loading…" : value ? `${value} (${language})` : "Pick an approved template"}
+          </span>
+          <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-slate-400" />
+        </button>
+
+        {open && (
+          <div className="absolute z-50 mt-1 w-full rounded-md border border-slate-700 bg-slate-900 shadow-xl">
+            <div className="p-2 border-b border-slate-800">
+              <input
+                autoFocus
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search templates…"
+                className="w-full rounded bg-slate-800 px-2 py-1 text-xs text-white placeholder:text-slate-500 focus:outline-none"
+              />
+            </div>
+            <ul className="max-h-48 overflow-y-auto py-1">
+              {filtered.length === 0 && (
+                <li className="px-3 py-2 text-xs text-slate-500">
+                  {loading ? "Loading…" : templates.length === 0 ? "No approved templates found" : "No match"}
+                </li>
+              )}
+              {filtered.map((t) => (
+                <li key={`${t.name}__${t.language}`}>
+                  <button
+                    type="button"
+                    onClick={() => { onChange(t.name, t.language); setOpen(false); setSearch("") }}
+                    className={cn(
+                      "w-full px-3 py-2 text-left hover:bg-slate-800 transition-colors",
+                      t.name === value && t.language === language && "bg-primary/10",
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-white">{t.name}</span>
+                      <span className="flex-shrink-0 rounded bg-slate-700 px-1.5 py-0.5 text-[10px] text-slate-300">{t.language}</span>
+                    </div>
+                    {t.body_text && (
+                      <p className="mt-0.5 truncate text-[11px] text-slate-500">{t.body_text}</p>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+      {selected?.body_text && (
+        <p className="mt-1 text-[11px] text-slate-500 line-clamp-2">{selected.body_text}</p>
+      )}
+    </div>
+  )
+}
+
+// ------------------------------------------------------------
+// Variable mapping reference panel
+// ------------------------------------------------------------
+
+const VARIABLE_MAP = [
+  { placeholder: "{{1}}", description: "Order ID" },
+  { placeholder: "{{2}}", description: "Amount / Total" },
+  { placeholder: "{{3}}", description: "ETA / Delivery date" },
+  { placeholder: "{{4}}", description: "Customer name" },
+  { placeholder: "{{5}}", description: "OTP code" },
+]
+
+function VariableMappingRef() {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="mb-2 last:mb-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-300 transition-colors"
+      >
+        <ChevronDown className={cn("h-3 w-3 transition-transform", open && "rotate-180")} />
+        Variable reference
+      </button>
+      {open && (
+        <div className="mt-1.5 rounded-md border border-slate-700 bg-slate-800/50 p-2">
+          <p className="mb-1.5 text-[10px] uppercase tracking-wide text-slate-500">Placeholder → Data</p>
+          <ul className="space-y-0.5">
+            {VARIABLE_MAP.map((v) => (
+              <li key={v.placeholder} className="flex items-center gap-2">
+                <code className="rounded bg-slate-700 px-1.5 py-0.5 text-[11px] font-mono text-primary">{v.placeholder}</code>
+                <span className="text-[11px] text-slate-400">{v.description}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function FieldBlock({
