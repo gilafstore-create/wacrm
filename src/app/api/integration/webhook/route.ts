@@ -317,8 +317,7 @@ async function handleOrderPlaced(admin: any, data: any, ownerUserId: string, add
   await admin.from('contact_notes').insert({
     contact_id: contact.id,
     user_id: ownerUserId,
-    content: `🛍️ Order #${order_id} placed — ₹${total} via ${payment_method ?? 'unknown'}`,
-    type: 'system',
+    note_text: `🛍️ Order #${order_id} placed — ₹${total} via ${payment_method ?? 'unknown'}`,
   })
   addStep('Note', `Order #${order_id} noted`)
 
@@ -366,8 +365,7 @@ async function handleOrderStatusChange(admin: any, data: any, status: string, ow
   await admin.from('contact_notes').insert({
     contact_id: contact.id,
     user_id: ownerUserId,
-    content: statusMessages[status] ?? `Order #${order_id} status: ${status}`,
-    type: 'system',
+    note_text: statusMessages[status] ?? `Order #${order_id} status: ${status}`,
   })
   addStep('Note', `status=${status} noted`)
 
@@ -385,7 +383,7 @@ async function handlePaymentSuccess(admin: any, data: any, ownerUserId: string, 
   addStep('Contact', `id=${contact.id}`)
   await admin.from('contact_notes').insert({
     contact_id: contact.id, user_id: ownerUserId,
-    content: `💳 Payment of ₹${amount} received for order #${order_id}`, type: 'system',
+    note_text: `💳 Payment of ₹${amount} received for order #${order_id}`,
   })
   addStep('Note', `Payment ₹${amount} noted`)
   await ensureTag(admin, contact, 'paid')
@@ -402,7 +400,7 @@ async function handlePaymentFailed(admin: any, data: any, ownerUserId: string, a
   addStep('Contact', `id=${contact.id}`)
   await admin.from('contact_notes').insert({
     contact_id: contact.id, user_id: ownerUserId,
-    content: `⚠️ Payment failed for order #${order_id}`, type: 'system',
+    note_text: `⚠️ Payment failed for order #${order_id}`,
   })
   addStep('Note', `Payment failed noted`)
   await triggerAutomation(admin, contact, 'payment_failed', data)
@@ -418,8 +416,7 @@ async function handleCartAbandoned(admin: any, data: any, ownerUserId: string, a
   addStep('Contact', `id=${contact.id}`)
   await admin.from('contact_notes').insert({
     contact_id: contact.id, user_id: ownerUserId,
-    content: `🛒 Cart abandoned — ₹${cart_total} (${items?.length ?? '?'} items)${checkout_url ? ` — ${checkout_url}` : ''}`,
-    type: 'system',
+    note_text: `🛒 Cart abandoned — ₹${cart_total} (${items?.length ?? '?'} items)${checkout_url ? ` — ${checkout_url}` : ''}`,
   })
   await ensureTag(admin, contact, 'cart-abandoned')
   await triggerAutomation(admin, contact, 'cart_abandoned', data)
@@ -533,8 +530,7 @@ async function handleTriggerOrderCreated(admin: any, data: any, ownerUserId: str
   await admin.from('contact_notes').insert({
     contact_id: contact.id,
     user_id:    ownerUserId,
-    content:    `🛍️ [Trigger] Order #${order_id} created — ₹${total} via ${payment_method ?? 'unknown'}`,
-    type:       'system',
+    note_text:  `🛍️ [Trigger] Order #${order_id} created — ₹${total} via ${payment_method ?? 'unknown'}`,
   })
   addStep('Note', `Order #${order_id} noted`)
 
@@ -582,8 +578,7 @@ async function handleTriggerPaymentSuccess(admin: any, data: any, ownerUserId: s
   await admin.from('contact_notes').insert({
     contact_id: contact.id,
     user_id:    ownerUserId,
-    content:    `💳 [Trigger] Payment ₹${amount} received for order #${order_id} via ${method ?? 'unknown'}`,
-    type:       'system',
+    note_text:  `💳 [Trigger] Payment ₹${amount} received for order #${order_id} via ${method ?? 'unknown'}`,
   })
   addStep('Note', `Payment ₹${amount} noted`)
 
@@ -650,8 +645,7 @@ async function handleCheckoutStarted(admin: any, data: any, ownerUserId: string,
   await admin.from('contact_notes').insert({
     contact_id: contact.id,
     user_id:    ownerUserId,
-    content:    `🛒 Checkout started — ₹${total} (${item_count} items)`,
-    type:       'system',
+    note_text:  `🛒 Checkout started — ₹${total} (${item_count} items)`,
   })
 
   await ensureTag(admin, contact, 'checkout-started')
@@ -673,8 +667,7 @@ async function handleRefundInitiated(admin: any, data: any, ownerUserId: string,
   await admin.from('contact_notes').insert({
     contact_id: contact.id,
     user_id:    ownerUserId,
-    content:    `↩️ Refund initiated for Order #${order_id} — ₹${refund_amount} (${refund_id ?? 'no refund ID'})`,
-    type:       'system',
+    note_text:  `↩️ Refund initiated for Order #${order_id} — ₹${refund_amount} (${refund_id ?? 'no refund ID'})`,
   })
   await triggerAutomation(admin, contact, 'refund_initiated', data)
   return { success: true, contact_id: contact.id, order_id, handler: 'handleRefundInitiated' }
@@ -693,8 +686,7 @@ async function handleRefundCompleted(admin: any, data: any, ownerUserId: string,
   await admin.from('contact_notes').insert({
     contact_id: contact.id,
     user_id:    ownerUserId,
-    content:    `✅ Refund completed for Order #${order_id} — ₹${refund_amount} (${refund_id ?? 'no refund ID'})`,
-    type:       'system',
+    note_text:  `✅ Refund completed for Order #${order_id} — ₹${refund_amount} (${refund_id ?? 'no refund ID'})`,
   })
   await triggerAutomation(admin, contact, 'refund_completed', data)
   return { success: true, contact_id: contact.id, order_id, handler: 'handleRefundCompleted' }
@@ -731,15 +723,30 @@ function flattenGilafStorePayload(data: any): any {
   }
 }
 
+// ── Helper: normalize phone to E.164 Indian format ──────────────────────────
+// Rules: strip all non-digits; 10-digit Indian mobiles get 91 prefix;
+// numbers already starting with 91 (12 digits) are kept as-is.
+function normalizePhone(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const digits = raw.replace(/\D/g, '')
+  if (!digits) return null
+  if (digits.length === 12 && digits.startsWith('91')) return digits  // already E.164
+  if (digits.length === 11 && digits.startsWith('0')) return `91${digits.slice(1)}`  // 0XXXXXXXXXX
+  if (digits.length === 10) return `91${digits}`                       // 10-digit Indian mobile
+  return digits  // keep as-is for other formats
+}
+
 // ── Helper: find contact by phone (user scoped) ───────────────────────────────
 async function findContactByPhone(admin: any, phone: string, ownerUserId: string) {
   if (!phone) return null
-  const normalized = phone.replace(/\D/g, '').slice(-10)
+  // Match on last 10 digits so +918825041655, 918825041655, 8825041655 all match
+  const last10 = phone.replace(/\D/g, '').slice(-10)
+  if (!last10) return null
   const { data } = await admin
     .from('contacts')
     .select('id, name, phone, email, user_id')
     .eq('user_id', ownerUserId)
-    .ilike('phone', `%${normalized}`)
+    .ilike('phone', `%${last10}`)
     .limit(1)
     .maybeSingle()
   return data
@@ -748,39 +755,69 @@ async function findContactByPhone(admin: any, phone: string, ownerUserId: string
 // ── Helper: find or create contact ────────────────────────────────────────────
 async function findOrCreateContact(
   admin: any,
-  info: { name?: string; phone?: string; email?: string; local_user_id?: number },
+  // local_user_id kept for call-site compat; external_id col doesn't exist on contacts so it's ignored
+  info: { name?: string; phone?: string; email?: string; local_user_id?: number | string | null },
   ownerUserId: string,
 ) {
-  // Match order: local_user_id → email → phone
-  if (info.local_user_id) {
-    const { data } = await admin.from('contacts').select('id, name, phone, email, user_id')
-      .eq('user_id', ownerUserId).eq('external_id', String(info.local_user_id)).maybeSingle()
-    if (data) return data
-  }
+  const normPhone = normalizePhone(info.phone)
+
+  console.log('[ContactResolver] phone_raw:', info.phone ?? 'none',
+    'phone_normalized:', normPhone ?? 'none',
+    'email:', info.email ?? 'none',
+    'owner_id:', ownerUserId)
+
+  // ── Lookup: email first (more stable), then phone ──────────────────────────
   if (info.email) {
-    const { data } = await admin.from('contacts').select('id, name, phone, email, user_id')
+    const { data } = await admin.from('contacts')
+      .select('id, name, phone, email, user_id')
       .eq('user_id', ownerUserId).eq('email', info.email).maybeSingle()
-    if (data) return data
+    if (data) {
+      console.log('[ContactResolver] found by email:', data.id)
+      return data
+    }
   }
-  if (info.phone) {
-    const existing = await findContactByPhone(admin, info.phone, ownerUserId)
-    if (existing) return existing
+  if (normPhone) {
+    const existing = await findContactByPhone(admin, normPhone, ownerUserId)
+    if (existing) {
+      console.log('[ContactResolver] found by phone:', existing.id)
+      return existing
+    }
   }
 
-  // Create new contact
+  // ── Insert (only columns that exist on the contacts table) ─────────────────
   const insertPayload = {
     user_id: ownerUserId,
-    name: info.name ?? info.phone ?? 'Unknown',
-    phone: info.phone ?? null,
-    email: info.email ?? null,
-    external_id: info.local_user_id ? String(info.local_user_id) : null,
+    name:    info.name ?? normPhone ?? 'Unknown',
+    phone:   normPhone ?? null,
+    email:   info.email ?? null,
   }
-  console.log('[findOrCreateContact] creating:', { phone: insertPayload.phone, email: insertPayload.email, external_id: insertPayload.external_id, name: insertPayload.name })
-  const { data: newContact, error: insertErr } = await admin.from('contacts').insert(insertPayload).select().maybeSingle()
+  console.log('[ContactResolver] inserting:', {
+    name: insertPayload.name, phone: insertPayload.phone, email: insertPayload.email,
+  })
+  const { data: newContact, error: insertErr } = await admin
+    .from('contacts').insert(insertPayload).select().maybeSingle()
 
   if (insertErr) {
-    console.error('[findOrCreateContact] insert failed:', insertErr.message, insertErr.code, { phone: info.phone, email: info.email, local_user_id: info.local_user_id })
+    console.error('[ContactResolver] insert failed:', {
+      code: insertErr.code, message: insertErr.message, details: insertErr.details,
+      phone_raw: info.phone, phone_normalized: normPhone, email: info.email,
+      owner_id: ownerUserId,
+    })
+    // Race condition: concurrent request may have just created it — retry lookup
+    if (info.email) {
+      const { data: retry } = await admin.from('contacts')
+        .select('id, name, phone, email, user_id')
+        .eq('user_id', ownerUserId).eq('email', info.email).maybeSingle()
+      if (retry) { console.log('[ContactResolver] found on retry by email:', retry.id); return retry }
+    }
+    if (normPhone) {
+      const retry = await findContactByPhone(admin, normPhone, ownerUserId)
+      if (retry) { console.log('[ContactResolver] found on retry by phone:', retry.id); return retry }
+    }
+    return null
   }
+
+  console.log('[ContactResolver] created new contact:', newContact?.id)
   return newContact
 }
 
