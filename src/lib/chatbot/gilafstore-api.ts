@@ -7,6 +7,10 @@
 const BASE = (process.env.GILAFSTORE_API_URL ?? 'https://gilafstore.com').replace(/\/$/, '')
 const SECRET = process.env.GILAFSTORE_BOT_SECRET ?? process.env.WACRM_WEBHOOK_SECRET ?? ''
 
+// Startup diagnostics — visible in Render logs
+console.log('[gilafstore-api] BASE:', BASE)
+console.log('[gilafstore-api] SECRET set?', SECRET ? `YES (${SECRET.length} chars)` : 'NO — API calls will fail!')
+
 export interface GilafOrder {
   order_id: string
   order_number: string
@@ -40,15 +44,18 @@ async function call<T>(params: Record<string, string>): Promise<T | null> {
     const url = new URL(`${BASE}/api/whatsapp_bot.php`)
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
     url.searchParams.set('secret', SECRET)
+    console.log('[gilafstore-api] calling:', params.type, params.category_id ?? params.phone ?? '')
     const res = await fetch(url.toString(), { next: { revalidate: 0 } })
     if (!res.ok) {
-      console.warn('[gilafstore-api] HTTP', res.status, await res.text())
+      const body = await res.text()
+      console.warn('[gilafstore-api] HTTP', res.status, 'for', params.type, '→', body)
       return null
     }
     const json = await res.json()
+    console.log('[gilafstore-api] ok:', params.type, JSON.stringify(json).slice(0, 120))
     return json as T
   } catch (err) {
-    console.error('[gilafstore-api] fetch error:', err)
+    console.error('[gilafstore-api] fetch error for', params.type, ':', err)
     return null
   }
 }
