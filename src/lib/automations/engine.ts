@@ -7,6 +7,7 @@ import type {
   KeywordMatchTriggerConfig,
   SendMessageStepConfig,
   SendTemplateStepConfig,
+  SendInteractiveMenuStepConfig,
   SendWebhookStepConfig,
   TagStepConfig,
   UpdateContactFieldStepConfig,
@@ -15,7 +16,7 @@ import type {
   AssignConversationStepConfig,
 } from '@/types'
 import { supabaseAdmin } from './admin-client'
-import { engineSendText, engineSendTemplate } from './meta-send'
+import { engineSendText, engineSendTemplate, engineSendInteractiveMenu } from './meta-send'
 
 // ------------------------------------------------------------
 // Public API
@@ -304,6 +305,26 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
   const db = supabaseAdmin()
 
   switch (step.step_type) {
+    case 'send_interactive_menu': {
+      const cfg = step.step_config as unknown as SendInteractiveMenuStepConfig
+      if (!args.contactId) throw new Error('send_interactive_menu needs a contact')
+      if (!cfg.body?.trim()) throw new Error('send_interactive_menu: body is required')
+      if (!cfg.options?.length) throw new Error('send_interactive_menu: at least one option is required')
+      const conversationId = await resolveConversationId(args)
+      const { whatsapp_message_id } = await engineSendInteractiveMenu({
+        userId: args.automation.user_id,
+        conversationId,
+        contactId: args.contactId,
+        menuType: cfg.menu_type ?? 'buttons',
+        body: interpolate(cfg.body, args),
+        header: cfg.header ? interpolate(cfg.header, args) : undefined,
+        footer: cfg.footer ? interpolate(cfg.footer, args) : undefined,
+        buttonText: cfg.button_text,
+        options: cfg.options,
+      })
+      return `interactive menu sent (${whatsapp_message_id})`
+    }
+
     case 'send_message': {
       const cfg = step.step_config as SendMessageStepConfig
       if (!args.contactId) throw new Error('send_message needs a contact')

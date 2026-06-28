@@ -25,6 +25,7 @@ import {
   Loader2,
   ArrowDown,
   ArrowUp,
+  LayoutGrid,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -89,11 +90,13 @@ const STEP_META: Record<AutomationStepType, StepMeta> = {
   condition: { label: "Condition (If/Else)", icon: GitBranch, border: "border-l-amber-500" },
   send_webhook: { label: "Send Webhook", icon: Webhook, border: "border-l-primary" },
   close_conversation: { label: "Close Conversation", icon: CircleSlash, border: "border-l-primary" },
+  send_interactive_menu: { label: "Send Interactive Menu", icon: LayoutGrid, border: "border-l-pink-500" },
 }
 
 const ADDABLE_STEPS: AutomationStepType[] = [
   "send_message",
   "send_template",
+  "send_interactive_menu",
   "add_tag",
   "remove_tag",
   "assign_conversation",
@@ -132,6 +135,7 @@ const TRIGGER_OPTIONS: { value: AutomationTriggerType; label: string; hint: stri
   { value: "login_otp", label: "Login OTP", hint: "When a customer requests a login OTP" },
   { value: "refund_initiated", label: "Refund Initiated", hint: "When a refund is requested by the customer" },
   { value: "refund_completed", label: "Refund Completed", hint: "When a refund has been processed successfully" },
+  { value: "menu_selection", label: "Menu Option Selected", hint: "When a contact taps a button or selects a list option from a WhatsApp menu" },
 ]
 
 function cid(): string {
@@ -166,6 +170,18 @@ function blankConfig(type: AutomationStepType): Record<string, unknown> {
       return { url: "", headers: {}, body_template: "" }
     case "close_conversation":
       return {}
+    case "send_interactive_menu":
+      return {
+        menu_type: "buttons",
+        body: "",
+        header: "",
+        footer: "",
+        button_text: "Choose an option",
+        options: [
+          { id: "opt_1", title: "Option 1" },
+          { id: "opt_2", title: "Option 2" },
+        ],
+      }
     default:
       return {}
   }
@@ -970,6 +986,148 @@ function StepEditor({
           Sets the conversation status to &quot;closed&quot;. No configuration needed.
         </p>
       )
+    case "send_interactive_menu": {
+      type MenuOption = { id: string; title: string; description?: string }
+      const menuType = (cfg.menu_type as string) ?? "buttons"
+      const options: MenuOption[] = (cfg.options as MenuOption[]) ?? []
+      const isList = menuType === "list"
+
+      const updateOption = (idx: number, patch: Partial<MenuOption>) => {
+        const next = options.map((o, i) => (i === idx ? { ...o, ...patch } : o))
+        set({ options: next })
+      }
+      const removeOption = (idx: number) =>
+        set({ options: options.filter((_, i) => i !== idx) })
+      const addOption = () => {
+        const n = options.length + 1
+        set({ options: [...options, { id: `opt_${n}`, title: `Option ${n}` }] })
+      }
+
+      const maxOptions = isList ? 10 : 3
+      return (
+        <>
+          <FieldBlock label="Menu Type">
+            <select
+              value={menuType}
+              onChange={(e) => set({ menu_type: e.target.value })}
+              className="w-full rounded-md border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-white"
+            >
+              <option value="buttons">Buttons (up to 3 — shown inline)</option>
+              <option value="list">List (up to 10 — tap to expand)</option>
+            </select>
+          </FieldBlock>
+
+          <FieldBlock label="Body text *">
+            <Textarea
+              value={(cfg.body as string) ?? ""}
+              onChange={(e) => set({ body: e.target.value })}
+              placeholder="How can we help you today?"
+              className="min-h-20 bg-slate-800 text-white"
+            />
+          </FieldBlock>
+
+          <FieldBlock label="Header (optional)">
+            <Input
+              value={(cfg.header as string) ?? ""}
+              onChange={(e) => set({ header: e.target.value })}
+              placeholder="Welcome to Gilaf Store"
+              className="bg-slate-800 text-white"
+            />
+          </FieldBlock>
+
+          <FieldBlock label="Footer (optional)">
+            <Input
+              value={(cfg.footer as string) ?? ""}
+              onChange={(e) => set({ footer: e.target.value })}
+              placeholder="Reply anytime"
+              className="bg-slate-800 text-white"
+            />
+          </FieldBlock>
+
+          {isList && (
+            <FieldBlock label="Button label">
+              <Input
+                value={(cfg.button_text as string) ?? "Choose an option"}
+                onChange={(e) => set({ button_text: e.target.value })}
+                placeholder="Choose an option"
+                className="bg-slate-800 text-white"
+              />
+            </FieldBlock>
+          )}
+
+          <div className="mt-2">
+            <p className="mb-1.5 text-xs font-medium text-slate-300">
+              Options ({options.length}/{maxOptions})
+            </p>
+            <div className="space-y-2">
+              {options.map((opt, idx) => (
+                <div
+                  key={idx}
+                  className="rounded-md border border-slate-700 bg-slate-800/50 p-2"
+                >
+                  <div className="mb-1.5 flex items-center gap-2">
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-pink-500/20 text-[10px] font-bold text-pink-300">
+                      {idx + 1}
+                    </span>
+                    <Input
+                      value={opt.title}
+                      onChange={(e) => updateOption(idx, { title: e.target.value })}
+                      placeholder="Title (≤20 chars for buttons, ≤24 for list)"
+                      className="h-7 flex-1 bg-slate-800 text-xs text-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeOption(idx)}
+                      className="text-slate-500 hover:text-rose-400"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <p className="mb-0.5 text-[10px] text-slate-500">Option ID (returned when tapped)</p>
+                      <Input
+                        value={opt.id}
+                        onChange={(e) => updateOption(idx, { id: e.target.value })}
+                        placeholder="e.g. products"
+                        className="h-7 bg-slate-800 text-xs text-white"
+                      />
+                    </div>
+                    {isList && (
+                      <div className="flex-1">
+                        <p className="mb-0.5 text-[10px] text-slate-500">Description (≤72 chars)</p>
+                        <Input
+                          value={opt.description ?? ""}
+                          onChange={(e) => updateOption(idx, { description: e.target.value })}
+                          placeholder="Short description"
+                          className="h-7 bg-slate-800 text-xs text-white"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {options.length < maxOptions && (
+              <button
+                type="button"
+                onClick={addOption}
+                className="mt-2 flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-slate-700 py-1.5 text-xs text-slate-400 hover:border-pink-500/50 hover:text-pink-400"
+              >
+                <Plus className="h-3 w-3" /> Add option
+              </button>
+            )}
+          </div>
+
+          <p className="mt-2 text-[10px] text-slate-500">
+            Use the <strong>Condition (If/Else)</strong> step after this action — set Subject to
+            &ldquo;Message content&rdquo; and Value to the option ID to route by selection.
+            Or create a separate automation with trigger &ldquo;Menu Option Selected&rdquo;
+            and filter on <code>{"{{option_id}}"}</code>.
+          </p>
+        </>
+      )
+    }
     default:
       return null
   }

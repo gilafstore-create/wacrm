@@ -54,6 +54,9 @@ export const GILAF_PAYLOAD_FIELDS: PayloadField[] = [
   // ── Cart ──────────────────────────────────────────────────────────────────
   { key: 'cart_total',       label: 'Cart Total (₹)',      example: '850.00',      triggers: ['cart_abandoned'] },
   { key: 'cart_url',         label: 'Cart Recovery URL',   example: 'https://gilafstore.com/cart', triggers: ['cart_abandoned'] },
+  // ── Interactive Menu Selection ────────────────────────────────────────────
+  { key: 'option_id',        label: 'Selected Option ID',  example: 'products',                        triggers: ['menu_selection'] },
+  { key: 'option_title',     label: 'Selected Option Title', example: 'Products',                      triggers: ['menu_selection'] },
   // ── General ───────────────────────────────────────────────────────────────
   { key: 'store_name',       label: 'Store Name',          example: 'Gilaf Store'                      },
 ]

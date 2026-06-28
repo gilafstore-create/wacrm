@@ -314,12 +314,14 @@ export type AutomationTriggerType =
   | 'customer_registered'
   | 'login_otp'
   | 'refund_initiated'
-  | 'refund_completed';
+  | 'refund_completed'
+  | 'menu_selection';
 
 
 export type AutomationStepType =
   | 'send_message'
   | 'send_template'
+  | 'send_interactive_menu'
   | 'add_tag'
   | 'remove_tag'
   | 'assign_conversation'
@@ -354,6 +356,21 @@ export type AutomationTriggerConfig =
   | TagTriggerConfig
   | TimeBasedTriggerConfig
   | Record<string, unknown>;
+
+export interface InteractiveMenuOption {
+  id: string;
+  title: string;
+  description?: string;
+}
+
+export interface SendInteractiveMenuStepConfig {
+  menu_type: 'buttons' | 'list';
+  body: string;
+  header?: string;
+  footer?: string;
+  button_text?: string;
+  options: InteractiveMenuOption[];
+}
 
 export interface SendMessageStepConfig {
   text: string;

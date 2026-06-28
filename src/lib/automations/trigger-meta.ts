@@ -92,6 +92,10 @@ export const TRIGGER_META: Record<AutomationTriggerType, TriggerMeta> = {
     label: 'Refund Completed',
     pillClass: 'border-orange-500/30 bg-orange-500/10 text-orange-300',
   },
+  menu_selection: {
+    label: 'Menu Option Selected',
+    pillClass: 'border-pink-500/30 bg-pink-500/10 text-pink-300',
+  },
 }
 
 export function triggerMeta(t: AutomationTriggerType | string): TriggerMeta {

@@ -714,7 +714,31 @@ async function processMessage(
     | 'first_inbound_message'
     | 'new_message_received'
     | 'keyword_match'
+    | 'menu_selection'
   )[] = []
+
+  // ── Interactive menu reply: fire menu_selection trigger and log ──
+  if (interactiveReplyId) {
+    // Log the tap to interactive_interactions (best-effort)
+    supabaseAdmin()
+      .from('interactive_interactions')
+      .insert({
+        user_id: userId,
+        contact_id: contactRecord.id,
+        conversation_id: conversation.id,
+        option_id: interactiveReplyId,
+        option_title: contentText ?? interactiveReplyId,
+        meta_message_id: message.id,
+      })
+      .then(({ error }: { error: unknown }) => {
+        if (error) console.warn('[webhook] interaction log failed:', error)
+      })
+
+    // menu_selection fires even when a flow consumed the message so
+    // automations can always react to button taps.
+    automationTriggers.push('menu_selection')
+  }
+
   // Content-level triggers are suppressed when a flow consumed the
   // message — see the comment block above.
   if (!flowConsumed) {
@@ -734,8 +758,14 @@ async function processMessage(
       triggerType,
       contactId: contactRecord.id,
       context: {
-        message_text: inboundText,
+        message_text: interactiveReplyId ?? inboundText,
         conversation_id: conversation.id,
+        vars: interactiveReplyId
+          ? {
+              option_id: interactiveReplyId,
+              option_title: contentText ?? interactiveReplyId,
+            }
+          : undefined,
       },
     }).catch((err) => console.error('[automations] dispatch failed:', err))
   }
