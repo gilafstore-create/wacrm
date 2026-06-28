@@ -744,6 +744,9 @@ function StepEditor({
             onChange={(name, lang, meta) =>
               set({ template_name: name, language: lang, _body_text: meta?.body_text ?? null })
             }
+            onMetaResolved={(meta) => {
+              if (!cfg._body_text && meta?.body_text) set({ _body_text: meta.body_text })
+            }}
           />
           <VariableInputs
             bodyText={(cfg._body_text as string | null | undefined) ?? null}
@@ -957,10 +960,12 @@ function TemplateDropdown({
   value,
   language,
   onChange,
+  onMetaResolved,
 }: {
   value: string
   language: string
   onChange: (name: string, language: string, meta: TemplateMeta | null) => void
+  onMetaResolved?: (meta: TemplateMeta | null) => void
 }) {
   const [templates, setTemplates] = useState<TemplateMeta[]>([])
   const [loading, setLoading] = useState(false)
@@ -972,7 +977,14 @@ function TemplateDropdown({
     setLoading(true)
     fetch("/api/whatsapp/templates/list")
       .then((r) => r.ok ? r.json() : { templates: [] })
-      .then((data) => setTemplates(data.templates ?? []))
+      .then((data) => {
+        const ts: TemplateMeta[] = data.templates ?? []
+        setTemplates(ts)
+        if (onMetaResolved && value) {
+          const found = ts.find((t) => t.name === value && t.language === language)
+          onMetaResolved(found ?? null)
+        }
+      })
       .catch(() => setTemplates([]))
       .finally(() => setLoading(false))
   }, [])
