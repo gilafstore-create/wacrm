@@ -361,6 +361,10 @@ export interface SendTemplateStepConfig {
   template_name: string;
   language?: string;
   variables?: Record<string, string>;
+  header_variables?: Record<string, string>;
+  _body_text?: string | null;
+  _header_content?: string | null;
+  _header_type?: string | null;
 }
 
 export interface TagStepConfig {

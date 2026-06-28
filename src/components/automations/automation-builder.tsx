@@ -742,12 +742,32 @@ function StepEditor({
             value={(cfg.template_name as string) ?? ""}
             language={(cfg.language as string) ?? "en_US"}
             onChange={(name, lang, meta) =>
-              set({ template_name: name, language: lang, _body_text: meta?.body_text ?? null })
+              set({
+                template_name: name,
+                language: lang,
+                _body_text: meta?.body_text ?? null,
+                _header_content: meta?.header_content ?? null,
+                _header_type: meta?.header_type ?? null,
+              })
             }
             onMetaResolved={(meta) => {
-              if (!cfg._body_text && meta?.body_text) set({ _body_text: meta.body_text })
+              const patch: Record<string, unknown> = {}
+              if (!cfg._body_text && meta?.body_text) patch._body_text = meta.body_text
+              if (!cfg._header_content && meta?.header_content) patch._header_content = meta.header_content
+              if (!cfg._header_type && meta?.header_type) patch._header_type = meta.header_type
+              if (Object.keys(patch).length) set(patch)
             }}
           />
+          {(cfg._header_type as string | null | undefined) === 'text' && (cfg._header_content as string | null | undefined) && (
+            <>
+              <p className="text-xs text-zinc-400 mt-2 mb-1">Header Variables</p>
+              <VariableInputs
+                bodyText={(cfg._header_content as string | null | undefined) ?? null}
+                variables={cfg.header_variables as Record<string, string> | undefined}
+                onChange={(vars) => set({ header_variables: vars })}
+              />
+            </>
+          )}
           <VariableInputs
             bodyText={(cfg._body_text as string | null | undefined) ?? null}
             variables={cfg.variables as Record<string, string> | undefined}
@@ -953,6 +973,8 @@ interface TemplateMeta {
   name: string
   language: string
   body_text: string | null
+  header_type?: string | null
+  header_content?: string | null
   sample_values: string[] | null
 }
 

@@ -33,6 +33,7 @@ interface SendTemplateArgs {
   templateName: string
   language?: string
   params?: string[]
+  headerParams?: string[]  // resolved header text variable values (e.g. customer name)
 }
 
 export async function engineSendText(args: SendTextArgs): Promise<{ whatsapp_message_id: string }> {
@@ -95,12 +96,37 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
 
   const accessToken = await decryptAsync(config.access_token)
 
+  // Fetch the full template row so sendTemplateMessage can build the correct
+  // components array (header + body + buttons) via buildSendComponents.
+  // The legacy body-only path omits the header component, which causes
+  // Meta error #132000 when the template has a TEXT header with {{1}}.
+  let templateRow: Record<string, unknown> | null = null
+  if (input.kind === 'template') {
+    const { data } = await db
+      .from('message_templates')
+      .select('*')
+      .eq('user_id', input.userId)
+      .eq('name', input.templateName)
+      .eq('language', input.language ?? 'en_US')
+      .maybeSingle()
+    templateRow = data
+  }
+
   const attempt = async (phone: string): Promise<string> => {
     if (input.kind === 'template') {
+      // Resolve header text: use configured headerParams first, then fall back
+      // to the template's sample value so existing automations without
+      // header_variables configured still send (not ideal but beats crashing).
+      const sampleHeader = Array.isArray((templateRow?.sample_values as any)?.header)
+        ? String((templateRow!.sample_values as any).header[0])
+        : undefined
+      const headerText = (input.headerParams?.[0]?.trim()) || sampleHeader
+
       console.log('[meta-send] sendTemplate:', {
         templateName: input.templateName,
         language: input.language,
         params: input.params,
+        headerText,
         to: phone,
       })
       const r = await sendTemplateMessage({
@@ -109,6 +135,11 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
         to: phone,
         templateName: input.templateName,
         language: input.language,
+        template: templateRow as any,
+        messageParams: {
+          body: input.params ?? [],
+          headerText,
+        },
         params: input.params,
       })
       console.log('[meta-send] sendTemplate success, messageId:', r.messageId)

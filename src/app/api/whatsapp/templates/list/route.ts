@@ -25,7 +25,7 @@ export async function GET() {
 
     const { data: templates, error } = await supabase
       .from('message_templates')
-      .select('name, language, body_text, sample_values')
+      .select('name, language, body_text, header_type, header_content, sample_values')
       .eq('user_id', user.id)
       .eq('status', 'APPROVED')
       .order('name', { ascending: true })

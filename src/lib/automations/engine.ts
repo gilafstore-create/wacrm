@@ -341,21 +341,23 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       // we MUST emit params in strict numeric order. Lexicographic sort
       // of "1", "2", …, "10" yields "1", "10", "2", … which silently
       // scrambles every template with ≥10 variables.
+      const numericSort = (a: string, b: string) => {
+        const na = Number(a), nb = Number(b)
+        const aNum = Number.isFinite(na), bNum = Number.isFinite(nb)
+        if (aNum && bNum) return na - nb
+        if (aNum) return -1
+        if (bNum) return 1
+        return a.localeCompare(b)
+      }
       const params = cfg.variables
-        ? Object.keys(cfg.variables)
-            .sort((a, b) => {
-              const na = Number(a)
-              const nb = Number(b)
-              const aNum = Number.isFinite(na)
-              const bNum = Number.isFinite(nb)
-              if (aNum && bNum) return na - nb
-              if (aNum) return -1
-              if (bNum) return 1
-              return a.localeCompare(b)
-            })
+        ? Object.keys(cfg.variables).sort(numericSort)
             .map((k) => interpolate(String(cfg.variables![k]), args))
         : []
-      console.log('[engine] send_template params:', params, 'conversationId:', conversationId)
+      const headerParams = cfg.header_variables
+        ? Object.keys(cfg.header_variables).sort(numericSort)
+            .map((k) => interpolate(String(cfg.header_variables![k]), args))
+        : []
+      console.log('[engine] send_template params:', params, 'headerParams:', headerParams, 'conversationId:', conversationId)
       const { whatsapp_message_id } = await engineSendTemplate({
         userId: args.automation.user_id,
         conversationId,
@@ -363,6 +365,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         templateName: cfg.template_name,
         language: cfg.language,
         params,
+        headerParams,
       })
       console.log('[engine] send_template success, waMessageId:', whatsapp_message_id)
       return `template sent via Meta (${whatsapp_message_id})`
