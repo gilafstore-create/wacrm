@@ -341,10 +341,16 @@ async function handleOrderPlaced(admin: any, data: any, ownerUserId: string, add
 async function handleOrderStatusChange(admin: any, data: any, status: string, ownerUserId: string, addStep: StepFn = () => {}) {
   data = flattenGilafStorePayload(data)
   const { order_id, phone, tracking_number, tracking_url } = data
-  addStep('Payload', `phone=${phone ?? 'none'} status=${status}`)
-  const contact = await findContactByPhone(admin, phone, ownerUserId)
-  if (!contact) { addStep('Contact', `No contact for phone=${phone ?? 'none'}, skipping`, false); return { success: true, handler: 'handleOrderStatusChange', message: 'Contact not found, skipping' } }
-  addStep('Contact', `id=${contact.id} name=${contact.name}`)
+  addStep('Payload', `phone=${phone ?? 'none'} status=${status} name=${data.customer_name ?? 'none'}`)
+  // Use findOrCreateContact so status events (cancelled/confirmed/shipped) work
+  // even when the contact was never created at order-placement time.
+  const contact = await findOrCreateContact(
+    admin,
+    { phone, email: data.email, name: data.customer_name, local_user_id: data.user_id },
+    ownerUserId,
+  )
+  if (!contact) { addStep('Contact', `Failed to find/create for phone=${phone ?? 'none'}`, false); return { success: false, error: 'Failed to find/create contact', handler: 'handleOrderStatusChange' } }
+  addStep('Contact', `id=${contact.id} name=${contact.name} phone=${contact.phone}`)
 
   const statusMessages: Record<string, string> = {
     confirmed: `✅ Order #${order_id} confirmed`,
