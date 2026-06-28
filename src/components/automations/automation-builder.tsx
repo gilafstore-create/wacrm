@@ -627,12 +627,11 @@ function StepRenderer({
 function ConditionBranches({
   step,
   parentPath,
-  parentScope: _parentScope,
   ...props
 }: {
   step: BuilderStep
   parentPath: StepPath
-} & Omit<StepListProps, "steps" | "parentPath">) {
+} & Omit<StepListProps, "steps" | "parentPath" | "parentScope">) {
   const yes = step.branches?.yes ?? []
   const no = step.branches?.no ?? []
   // parentPath is the path TO the condition step itself (e.g. [{kind:"root",index:0}]).
