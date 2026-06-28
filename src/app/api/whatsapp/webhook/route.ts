@@ -6,6 +6,7 @@ import { normalizePhone, phonesMatch } from '@/lib/whatsapp/phone-utils'
 import { verifyMetaWebhookSignatureAsync } from '@/lib/whatsapp/webhook-signature'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
+import { handleChatbotMessage } from '@/lib/chatbot/router'
 import {
   handleTemplateWebhookChange,
   isTemplateWebhookField,
@@ -703,6 +704,24 @@ async function processMessage(
   })
   const flowConsumed = flowResult.consumed
 
+  // ── Chatbot router ────────────────────────────────────────────────────────
+  // Runs after the existing flow runner. Returns true when the Gilaf Store
+  // chatbot handled the message; in that case we suppress automation
+  // dispatch the same way flowConsumed does.
+  let chatbotConsumed = false
+  try {
+    chatbotConsumed = await handleChatbotMessage({
+      userId,
+      contactId: contactRecord.id,
+      conversationId: conversation.id,
+      contactPhone: senderPhone,
+      messageText: contentText ?? message.text?.body ?? '',
+      optionId: interactiveReplyId ?? undefined,
+    })
+  } catch (err) {
+    console.error('[chatbot] router error (non-fatal):', err)
+  }
+
   // Fire any automations that react to this webhook event. All dispatches
   // run here (not earlier) so the contact, conversation, and inbound
   // message all exist before any step — including send_message — runs.
@@ -739,9 +758,9 @@ async function processMessage(
     automationTriggers.push('menu_selection')
   }
 
-  // Content-level triggers are suppressed when a flow consumed the
-  // message — see the comment block above.
-  if (!flowConsumed) {
+  // Content-level triggers are suppressed when the flow runner OR the
+  // chatbot consumed the message.
+  if (!flowConsumed && !chatbotConsumed) {
     automationTriggers.push('new_message_received', 'keyword_match')
   }
   // new_contact_created fires only when the webhook just auto-created the
