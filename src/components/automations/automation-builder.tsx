@@ -311,6 +311,7 @@ export function AutomationBuilder({ initial }: { initial: BuilderInitial }) {
           <StepList
             steps={state.steps}
             parentPath={[]}
+            parentScope={{ kind: "root" }}
             expandedId={expandedId}
             setExpandedId={setExpandedId}
             updateStep={updateStep}
@@ -479,6 +480,7 @@ type StepPath = (
 interface StepListProps {
   steps: BuilderStep[]
   parentPath: StepPath
+  parentScope: ParentScope
   expandedId: string | null
   setExpandedId: (id: string | null) => void
   updateStep: (path: StepPath, updater: (s: BuilderStep) => BuilderStep) => void
@@ -489,15 +491,7 @@ interface StepListProps {
 }
 
 function StepList(props: StepListProps) {
-  const { steps, parentPath, ...rest } = props
-  const parentScope: ParentScope =
-    parentPath.length === 0
-      ? { kind: "root" }
-      : (() => {
-          const last = parentPath[parentPath.length - 1]
-          if (last.kind !== "branch") return { kind: "root" } as const
-          return { kind: "branch", parentCid: last.parentCid, branch: last.branch } as const
-        })()
+  const { steps, parentPath, parentScope, ...rest } = props
 
   return (
     <div className="flex flex-col items-center">
@@ -633,6 +627,7 @@ function StepRenderer({
 function ConditionBranches({
   step,
   parentPath,
+  parentScope: _parentScope,
   ...props
 }: {
   step: BuilderStep
@@ -640,27 +635,31 @@ function ConditionBranches({
 } & Omit<StepListProps, "steps" | "parentPath">) {
   const yes = step.branches?.yes ?? []
   const no = step.branches?.no ?? []
-  // Build the child scope by appending a branch marker. The scope the
-  // StepList uses is driven by the LAST element of parentPath, so the
-  // tail's `index` doesn't matter — it's replaced per child during walks.
-  const yesPath: StepPath = [
-    ...parentPath,
-    { kind: "branch", parentCid: step.cid, branch: "yes", index: 0 },
-  ]
-  const noPath: StepPath = [
-    ...parentPath,
-    { kind: "branch", parentCid: step.cid, branch: "no", index: 0 },
-  ]
+  // parentPath is the path TO the condition step itself (e.g. [{kind:"root",index:0}]).
+  // Each branch StepList receives parentPath unchanged so that StepRenderer builds
+  // the correct child path: [...parentPath, {kind:"branch", parentCid, branch, index}].
+  // We pass explicit parentScope per branch — do NOT append a branch marker to
+  // parentPath here, that would cause StepRenderer to double-append it.
   return (
     // Stack Yes/No vertically on mobile — two columns at 375px would
     // cram each branch to ~170px which is too narrow for the nested
     // cards. Two-column grid returns on sm+.
     <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
       <BranchColumn label="Yes" color="text-primary">
-        <StepList {...props} steps={yes} parentPath={yesPath} />
+        <StepList
+          {...props}
+          steps={yes}
+          parentPath={parentPath}
+          parentScope={{ kind: "branch", parentCid: step.cid, branch: "yes" }}
+        />
       </BranchColumn>
       <BranchColumn label="No" color="text-rose-400">
-        <StepList {...props} steps={no} parentPath={noPath} />
+        <StepList
+          {...props}
+          steps={no}
+          parentPath={parentPath}
+          parentScope={{ kind: "branch", parentCid: step.cid, branch: "no" }}
+        />
       </BranchColumn>
     </div>
   )
@@ -1271,10 +1270,22 @@ function insertAt(
     return copy
   }
   return steps.map((s) => {
-    if (s.cid !== parent.parentCid || !s.branches) return s
-    const list = [...s.branches[parent.branch]]
-    list.splice(index, 0, node)
-    return { ...s, branches: { ...s.branches, [parent.branch]: list } }
+    if (s.cid === parent.parentCid && s.branches) {
+      const list = [...s.branches[parent.branch]]
+      list.splice(index, 0, node)
+      return { ...s, branches: { ...s.branches, [parent.branch]: list } }
+    }
+    // Recursively search nested branches for the target condition
+    if (s.branches) {
+      return {
+        ...s,
+        branches: {
+          yes: insertAt(s.branches.yes, parent, index, node),
+          no: insertAt(s.branches.no, parent, index, node),
+        },
+      }
+    }
+    return s
   })
 }
 
@@ -1418,8 +1429,16 @@ function moveInBranches(
     ;[copy[i], copy[j]] = [copy[j], copy[i]]
     return copy
   }
-  const next = rest.length === 0 ? swap(bucket, head.index) : bucket
-  return { ...branches, [head.branch]: next }
+  if (rest.length === 0) {
+    return { ...branches, [head.branch]: swap(bucket, head.index) }
+  }
+  // Recurse into the nested condition at head.index
+  const updated = bucket.map((child, i) =>
+    i !== head.index
+      ? child
+      : { ...child, branches: moveInBranches(child.branches, rest, direction) },
+  )
+  return { ...branches, [head.branch]: updated }
 }
 
 // ------------------------------------------------------------
